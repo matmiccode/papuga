@@ -1,0 +1,10 @@
+# Narzedzia budowy - NIE sa potrzebne do uruchomienia programu.
+# setup.bat ich nie instaluje; gotowe artefakty (assets/icon.ico) sa w repo.
+#
+#   .venv\Scripts\pip.exe install -r requirements-dev.txt
+
+# Generowanie ikony (tools/make_icon.py)
+Pillow>=10.0
+
+# Budowanie instalatora (tools/build_exe.py)
+pyinstaller>=6.0

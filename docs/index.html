@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Papuga – transkrypcje offline</title>
+<meta name="description" content="Zamienia nagrania w tekst i rozpoznaje, kto mówi. Działa na Twoim komputerze, bez internetu i bez chmury. Program dla Windows, za darmo, z otwartym kodem.">
+<link rel="icon" href="favicon.ico">
+<meta property="og:title" content="Papuga – transkrypcje offline">
+<meta property="og:description" content="Zamienia nagrania w tekst i rozpoznaje, kto mówi. Działa na Twoim komputerze, bez internetu i bez chmury.">
+<meta property="og:image" content="https://matmiccode.github.io/papuga/img/okno.png">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/v1/matcode.css">
+<link rel="stylesheet" href="papuga.css">
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="marka" href="./"><img src="img/papuga-256.png" alt="" width="36" height="36">Papuga</a>
+  <nav>
+    <a href="#jak">Jak to działa</a>
+    <a href="#prywatnosc" class="ukryj-mobile">Prywatność</a>
+    <a href="https://github.com/matmiccode/papuga" class="ukryj-mobile">Kod</a>
+    <a class="btn btn-primary btn-sm" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Pobierz</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="wrap hero">
+  <div>
+    <h1>Zamienia nagrania w&nbsp;tekst. Na Twoim komputerze.</h1>
+    <p class="lead">Papuga rozpoznaje mowę i&nbsp;podpisuje, kto co powiedział. Niczego nie wysyła do chmury: po jednorazowym pobraniu modelu pracuje całkiem bez internetu.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Pobierz Papugę dla Windows</a>
+      <a class="btn btn-quiet" href="https://github.com/matmiccode/papuga">Kod źródłowy</a>
+    </div>
+    <p class="drobne"><span data-wersja>Wersja 1.1.0</span> · Windows 10 i&nbsp;11, 64-bit · za darmo, licencja MIT</p>
+  </div>
+
+  <div class="demo" aria-label="Przykład transkrypcji z rozpoznanymi mówcami">
+    <div class="demo-naglowek"><strong>Spotkanie zespołu 2026-09-28.m4a</strong><span>48:05</span></div>
+    <div class="demo-pasek" role="presentation"></div>
+    <ul class="transkrypt">
+      <li><time>0:00</time><b>Anna</b><span>Dobrze, zaczynamy. Marek, jak wygląda harmonogram?</span></li>
+      <li><time>0:06</time><b>Marek</b><span>Prototyp mamy na czwartek, testy w&nbsp;piątek rano.</span></li>
+      <li><time>0:12</time><b>Anna</b><span>Czyli demo dla zarządu w&nbsp;poniedziałek jest realne?</span></li>
+      <li><time>0:15</time><b>Marek</b><span>Realne, jeśli Kasia zdąży z&nbsp;tłumaczeniem interfejsu.</span></li>
+      <li><time>0:19</time><b>Kasia</b><span>Zdążę. Potrzebuję tylko ostatecznej listy ekranów.</span></li>
+      <li class="gotowe"><span>✓ Gotowe, 11,8× szybciej, niż trwało nagranie</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="jak">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Trzy kroki</h2>
+      <p>Bez konta, bez konfiguracji i&nbsp;bez uczenia się programu.</p>
+    </div>
+    <ol class="kroki">
+      <li>
+        <h3>Przeciągnij nagrania</h3>
+        <p>Audio albo wideo, pojedyncze pliki albo cały folder. MP4, MKV, MOV, MP3, WAV, M4A i&nbsp;kilkanaście innych formatów.</p>
+      </li>
+      <li>
+        <h3>Wybierz postać tekstu</h3>
+        <p>Tekst ze znacznikami czasu, czysty tekst, napisy SRT lub VTT do filmu, JSON z&nbsp;pełnymi danymi.</p>
+      </li>
+      <li>
+        <h3>Kliknij Transkrybuj</h3>
+        <p>Gotowe pliki trafiają do folderu wyników. Przy kilku nagraniach możesz odejść od komputera, program pokazuje, ile zostało.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="potrafi">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Co potrafi</h2>
+    </div>
+    <dl class="cechy">
+      <div>
+        <dt>Rozpoznaje, kto mówi</dt>
+        <dd>Dzieli rozmowę na osoby. Po nagraniu odsłuchasz próbkę każdego głosu i&nbsp;wpiszesz imię, które trafi do tekstu i&nbsp;napisów.</dd>
+      </div>
+      <div>
+        <dt>Polski i&nbsp;dziesięć innych języków</dt>
+        <dd>Angielski, niemiecki, ukraiński, czeski, słowacki, francuski, hiszpański, włoski, rosyjski albo wykrywanie automatyczne.</dd>
+      </div>
+      <div>
+        <dt>Lepiej pisze nazwiska i&nbsp;skróty</dt>
+        <dd>Wpisz je w&nbsp;pole Kontekst, a&nbsp;model będzie ich używał, zamiast zgadywać ze słuchu.</dd>
+      </div>
+      <div>
+        <dt>Sam dobiera model do komputera</dt>
+        <dd>Z&nbsp;kartą NVIDIA liczy kilkanaście razy szybciej, niż trwa nagranie. Bez karty pracuje na procesorze: wolniej, ale równie dokładnie.</dd>
+      </div>
+      <div>
+        <dt>Kolejka</dt>
+        <dd>Wrzucasz kilka nagrań naraz, usuwasz z&nbsp;kolejki w&nbsp;trakcie pracy, widzisz pozostały czas.</dd>
+      </div>
+      <div>
+        <dt>Aktualizuje się sam</dt>
+        <dd>Raz na dobę sprawdza, czy jest nowa wersja, i&nbsp;instaluje wyłącznie wydania podpisane kluczem autora.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="okno">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Tak wygląda praca</h2>
+      <p>Kolejka po lewej, ustawienia po prawej, postęp na dole. Pasek w&nbsp;barwach piór pokazuje bieżący plik.</p>
+    </div>
+    <figure>
+      <img src="img/okno.png" alt="Okno programu Papuga: kolejka czterech nagrań ze statusami, panel ustawień i pasek postępu w barwach piór" width="1102" height="852">
+      <figcaption>Papuga 1.1 w&nbsp;Windows 11.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="prywatnosc">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Prywatność</h2>
+      <p>Nagrania ze spotkań, wywiadów i&nbsp;rozmów to często rzeczy, których nie powinno się wysyłać na cudze serwery. Papuga ich nie wysyła.</p>
+    </div>
+    <dl class="cechy">
+      <div>
+        <dt>Wszystko liczy się lokalnie</dt>
+        <dd>Rozpoznawanie mowy i&nbsp;głosów działa na Twoim procesorze lub karcie graficznej. Nagrania i&nbsp;teksty nie opuszczają komputera.</dd>
+      </div>
+      <div>
+        <dt>Dwa połączenia, oba jawne</dt>
+        <dd>Raz, przy pierwszym uruchomieniu, pobiera model z&nbsp;huggingface.co. Raz na dobę pyta github.com o&nbsp;nową wersję, bez logowania i&nbsp;bez identyfikatorów.</dd>
+      </div>
+      <div>
+        <dt>Otwarty kod</dt>
+        <dd>Kod programu jest publiczny na licencji MIT. Każdy może sprawdzić, co program robi, i&nbsp;zbudować go samodzielnie.</dd>
+      </div>
+      <div>
+        <dt>Podpisane wydania</dt>
+        <dd>Aktualizację zainstaluje tylko wtedy, gdy wydanie podpisano kluczem autora wbudowanym w&nbsp;program. Samo konto na GitHubie do tego nie wystarczy.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="pobierz">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Zanim pobierzesz</h2>
+    </div>
+    <table>
+      <tr><th>System</th><td>Windows 10 lub 11, 64-bit</td></tr>
+      <tr><th>Pamięć</th><td>8 GB RAM</td></tr>
+      <tr><th>Miejsce na dysku</th><td>ok. 4 GB: program 1,1 GB i&nbsp;model 1,6 GB pobierany przy pierwszym uruchomieniu</td></tr>
+      <tr><th>Karta graficzna</th><td>NVIDIA ze sterownikiem od wersji 527 przyspiesza pracę kilkanaście razy. Nie jest wymagana.</td></tr>
+    </table>
+    <div class="uwaga odstep">
+      <p><strong>Windows ostrzeże przy pierwszej instalacji</strong> („System Windows ochronił ten komputer”), bo instalator nie ma płatnego certyfikatu wydawcy. Kliknij <em>Więcej informacji</em>, potem <em>Uruchom mimo to</em>. Instalacja nie wymaga uprawnień administratora i&nbsp;o&nbsp;nic nie pyta.</p>
+    </div>
+    <div class="cta odstep-duzy">
+      <a class="btn btn-primary" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Pobierz Papugę dla Windows</a>
+      <a class="btn btn-quiet" href="https://github.com/matmiccode/papuga/releases">Wszystkie wydania i&nbsp;zmiany</a>
+    </div>
+    <p class="muted small" style="margin-top: 16px;">Problem albo pomysł? <a href="https://github.com/matmiccode/papuga/issues/new">Napisz na GitHubie</a>.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>MATCODE · <a href="https://matmiccode.github.io/">inne programy</a></div>
+    <nav>
+      <a href="https://buycoffee.to/matcode">Postaw kawę autorowi</a>
+      <a href="https://github.com/matmiccode/papuga/blob/main/LICENCJE.txt">Licencje składników</a>
+      <a href="https://github.com/matmiccode/papuga/blob/main/LICENSE">Licencja MIT</a>
+      <a href="https://github.com/matmiccode">GitHub</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+// Numer wersji i bezpośredni odnośnik do instalatora z najnowszego wydania.
+// Bez odpowiedzi (brak sieci, limit API) zostają wartości wpisane w stronę.
+(async () => {
+  try {
+    const odp = await fetch("https://api.github.com/repos/matmiccode/papuga/releases/latest",
+                            { headers: { Accept: "application/vnd.github+json" } });
+    if (!odp.ok) return;
+    const dane = await odp.json();
+    const wersja = String(dane.tag_name || "").replace(/^v/, "");
+    const plik = (dane.assets || []).find(z => /^Papuga-[\d.]+-Setup\.exe$/.test(z.name));
+    if (wersja) document.querySelectorAll("[data-wersja]").forEach(e => { e.textContent = "Wersja " + wersja; });
+    if (plik) document.querySelectorAll("[data-pobierz]").forEach(e => { e.href = plik.browser_download_url; });
+  } catch (_) { /* strona działa bez tego */ }
+})();
+</script>
+</body>
+</html>

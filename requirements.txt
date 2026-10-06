@@ -1,0 +1,24 @@
+# Zależności instalowane przez setup.bat do lokalnego .venv.
+# Nie instaluj ich ręcznie w systemowym Pythonie — instalator dobiera
+# dodatkowo biblioteki CUDA w zależności od wykrytej karty graficznej.
+
+# Silnik transkrypcji (CTranslate2) — szybszy i lżejszy niż openai-whisper
+faster-whisper>=1.1.0
+
+# Przeciąganie plików do okna programu
+tkinterdnd2>=0.4.0
+
+# Weryfikacja certyfikatów przez magazyn systemowy Windows — bez tego
+# pobieranie modelu pada w sieciach firmowych z inspekcją TLS
+truststore>=0.9
+
+# Rozpoznawanie mówców (kto co powiedział). Wersja procesorowa — pomiary
+# pokazały, że na GPU ta akurat operacja idzie wolniej.
+sherpa-onnx>=1.12
+
+# --- tylko na komputerach z kartą NVIDIA (dokłada je bootstrap.py) ---
+# nvidia-cublas-cu12
+# nvidia-cudnn-cu12>=9.0
+
+# --- opcjonalny silnik zapasowy: setup.bat --with-openai-whisper ---
+# openai-whisper

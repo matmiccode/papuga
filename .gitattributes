@@ -1,0 +1,27 @@
+# Domyślnie: normalizuj do LF w repozytorium
+* text=auto
+
+# Skrypty Windows muszą mieć CRLF — cmd.exe potrafi się zakrztusić na LF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Kod i dokumentacja
+*.py   text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+
+# Instrukcja dla użytkowników - CRLF, żeby otwarła sie w kazdym
+# edytorze na Windows
+INSTRUKCJA.txt text eol=crlf
+*.json text eol=lf
+
+# Pliki binarne — nie ruszaj
+*.pt    binary
+*.bin   binary
+*.png   binary
+*.ico   binary
+*.wav   binary
+*.mp3   binary
+*.mp4   binary
+*.mkv   binary

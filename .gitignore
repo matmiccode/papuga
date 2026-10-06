@@ -1,0 +1,47 @@
+# Środowisko wirtualne budowane przez setup.bat
+.venv/
+venv/
+
+# Modele Whispera — kilka GB, pobierają się same
+models/
+
+# Modele rozpoznawania mówców (44 MB) — pobierają się same
+modele-mowcow/
+
+# Pliki tymczasowe (wyciągnięte audio)
+.cache/
+
+# Wyniki transkrypcji
+transkrypcje/
+*.srt
+*.vtt
+
+# Ustawienia lokalne użytkownika
+config.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Systemowe
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Podglądy ikon z tools/make_icon.py
+assets/**/icon-preview.png
+assets/**/icon-sizes.png
+assets/icon-preview.png
+assets/icon-sizes.png
+
+# Podpis wydania firmowego z imieniem i nazwiskiem — zostaje poza repozytorium
+tools/podpis_firmy.local.txt
+
+# Spis licencji skladnikow - generowany przez tools/licencje.py przy budowie i publikacji
+LICENCJE.txt

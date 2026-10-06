@@ -1,0 +1,55 @@
+/* Papuga — to, co różni tę stronę od ramy MATCODE: barwy piór i pokaz transkrypcji. */
+
+:root {
+  --pioro-1: #1c64c4;
+  --pioro-2: #2c965c;
+  --pioro-3: #f7ba1c;
+  --pioro-4: #ce202f;
+}
+
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; align-items: center; padding: 40px 0 64px; }
+.hero h1 { font-size: clamp(2.2rem, 4vw, 3.2rem); margin-bottom: 18px; }
+.hero .lead { font-size: 1.15rem; color: var(--muted); max-width: 30rem; margin-bottom: 28px; }
+.hero .drobne { color: var(--faint); font-size: 0.9rem; margin: 14px 0 0; }
+
+/* Pokaz: plik, pasek z piór i tekst, który pojawia się linijka po linijce.
+   Jedna zaplanowana animacja przy wejściu, nic poza tym się nie rusza. */
+.demo {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 20px 22px 22px; font-size: 0.98rem;
+}
+.demo-naglowek { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 0.9rem; margin-bottom: 10px; }
+.demo-naglowek strong { color: var(--text); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.demo-pasek { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; position: relative; }
+.demo-pasek::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, var(--pioro-1), var(--pioro-2), var(--pioro-3), var(--pioro-4));
+  clip-path: inset(0 100% 0 0);
+  animation: odslon 5.6s cubic-bezier(0.3, 0.7, 0.3, 1) 0.4s forwards;
+}
+@keyframes odslon { to { clip-path: inset(0 0 0 0); } }
+
+.transkrypt { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 10px; }
+.transkrypt li {
+  display: grid; grid-template-columns: 3em 5.2em 1fr; gap: 12px; align-items: baseline;
+  opacity: 0; transform: translateY(4px);
+  animation: pojaw 0.5s ease-out forwards;
+}
+.transkrypt li:nth-child(1) { animation-delay: 0.8s; }
+.transkrypt li:nth-child(2) { animation-delay: 1.9s; }
+.transkrypt li:nth-child(3) { animation-delay: 3.0s; }
+.transkrypt li:nth-child(4) { animation-delay: 4.1s; }
+.transkrypt li:nth-child(5) { animation-delay: 5.2s; }
+.transkrypt li.gotowe { grid-template-columns: 1fr; color: var(--ok); font-size: 0.9rem; margin-top: 6px; animation-delay: 6.3s; }
+.transkrypt time { color: var(--faint); font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+.transkrypt b { font-weight: 600; }
+@keyframes pojaw { to { opacity: 1; transform: none; } }
+
+@media (max-width: 860px) {
+  .hero { grid-template-columns: 1fr; gap: 32px; padding: 24px 0 48px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .transkrypt li { opacity: 1; transform: none; animation: none; }
+  .demo-pasek::after { clip-path: none; animation: none; }
+}

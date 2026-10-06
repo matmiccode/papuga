@@ -1,0 +1,1 @@
+"""Instalator środowiska."""

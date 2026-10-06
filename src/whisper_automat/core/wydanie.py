@@ -1,0 +1,158 @@
+"""Wydania programu — jeden kod, dwie marki.
+
+  * firma    — „Whisper Automat”: wersja firmowa, z modelem w instalatorze,
+               bez sprawdzania aktualizacji (firewall i tak by je blokował).
+  * papuga   — „Papuga – transkrypcje offline”: wersja publiczna z GitHuba,
+               model pobierany przy pierwszym uruchomieniu, aktualizacje,
+               link do wsparcia.
+
+Wydania różnią się nazwą, plikiem .exe, identyfikatorem instalatora
+i katalogiem danych, więc oba programy mogą stać obok siebie na jednym
+komputerze i nie nadpisują się nawzajem.
+
+Które wydanie działa, wybiera budowa (`build_exe.py --wydanie`): zapisuje
+`wydanie.json` do paczki. Uruchomione z kodu bierze zmienną
+WHISPER_AUTOMAT_WYDANIE, a bez niej — wydanie firmowe.
+
+Spakowany program bierze z `wydanie.json` wszystkie pola, nie tylko kod.
+Dzięki temu podpis z imieniem i nazwiskiem autora (wydanie firmowe) żyje
+tylko w lokalnym pliku `tools/podpis_firmy.local.txt` — poza repozytorium —
+i trafia wyłącznie do paczki firmowej, nie do kodu wkładanego w Papugę.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from dataclasses import asdict, dataclass, fields
+from pathlib import Path
+from typing import Optional
+
+PLIK = "wydanie.json"
+
+
+@dataclass(frozen=True)
+class Wydanie:
+    kod: str
+    #: Krótka nazwa pokazywana ludziom: menu Start, komunikaty, instalator.
+    nazwa: str
+    #: Nazwa techniczna bez spacji: plik .exe, katalog danych, instalator.
+    plik: str
+    #: Identyfikator dla paska zadań Windows.
+    app_id: str
+    #: AppId instalatora Inno Setup. To on decyduje, czy Windows uznaje
+    #: instalację za tę samą aplikację — dlatego każde wydanie ma własny.
+    inno_id: str
+    #: Repozytorium z wydaniami („właściciel/nazwa”). Puste = bez aktualizacji.
+    repo: str = ""
+    #: Strona wsparcia autora (np. buycoffee.to). Pusta = brak przycisku.
+    wsparcie_url: str = ""
+    #: Adres do kontaktu. Pusty = brak w oknie „O programie”.
+    kontakt_email: str = ""
+    #: Klucz publiczny Ed25519 (szesnastkowo) do sprawdzania podpisu wydań
+    #: (core/podpis.py). Z kluczem program instaluje sam tylko wydania
+    #: podpisane kluczem prywatnym autora (tools/klucz_wydan.py) — przejęte
+    #: konto GitHub nie wystarczy, żeby podsunąć ludziom obcy plik.
+    klucz_publiczny: str = ""
+    #: Podpis wydawcy: okno, właściwości pliku .exe, instalator. Wydanie
+    #: publiczne podpisuje się samą marką, bez imienia i nazwiska autora.
+    wydawca: str = "MATCODE"
+    #: Dopisek po myślniku w tytule okna, np. „transkrypcje offline”.
+    haslo: str = ""
+    #: Jedno-dwa zdania o programie: opis na GitHubie, ekran powitalny
+    #: instalatora, opis pliku .exe.
+    opis: str = ""
+
+    @property
+    def pelna_nazwa(self) -> str:
+        """„Papuga – transkrypcje offline” — tytuł okna i wpis w Aplikacjach."""
+        return f"{self.nazwa} – {self.haslo}" if self.haslo else self.nazwa
+
+    @property
+    def prawa(self) -> str:
+        return f"© 2026 {self.wydawca}"
+
+    @property
+    def strona_url(self) -> str:
+        return f"https://github.com/{self.repo}" if self.repo else ""
+
+    @property
+    def zgloszenia_url(self) -> str:
+        return f"https://github.com/{self.repo}/issues/new" if self.repo else ""
+
+    @property
+    def aktualizacje(self) -> bool:
+        return bool(self.repo)
+
+
+WYDANIA = {
+    "firma": Wydanie(
+        kod="firma",
+        nazwa="Whisper Automat",
+        plik="WhisperAutomat",
+        app_id="WhisperAutomat.App",
+        # Ten sam, którego używały wersje 1.0.x — aktualizacja wersji
+        # firmowej ma dalej nadpisywać istniejącą instalację.
+        inno_id="{7C2F1A64-5D3B-4E82-9A17-6B0E4C9D2F31}",
+        # Pełny podpis dokłada build_exe.py — patrz opis modułu.
+    ),
+    "papuga": Wydanie(
+        kod="papuga",
+        nazwa="Papuga",
+        plik="Papuga",
+        app_id="MATCODE.Papuga",
+        inno_id="{7CDF7F7F-B74F-4415-970D-792FE960F44A}",
+        repo="matmiccode/papuga",
+        # Skrzynka kontaktowa do uzupełnienia, gdy powstanie.
+        wsparcie_url="https://buycoffee.to/matcode",
+        kontakt_email="",
+        klucz_publiczny="5889fe93bba0dc4ee0df9a4be7c5f3ad908cce307f7d664f0046773f335656b4",
+        haslo="transkrypcje offline",
+        opis=("Zamienia nagrania w tekst i rozpoznaje, kto mówi. "
+              "Działa na Twoim komputerze, bez internetu i bez chmury."),
+    ),
+}
+
+DOMYSLNE = "firma"
+
+_biezace: Optional[Wydanie] = None
+
+
+def _z_paczki() -> Optional[Wydanie]:
+    """Wydanie zapisane w paczce przez build_exe.py."""
+    baza = getattr(sys, "_MEIPASS", None)
+    if not baza:
+        return None
+    try:
+        dane = json.loads((Path(baza) / PLIK).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    wzor = WYDANIA.get(str(dane.get("kod", "")).strip().lower())
+    if wzor is None:
+        return None
+    # Pola spoza wzoru (np. ze starszej paczki) pomijamy, brakujące
+    # bierzemy ze wzoru.
+    znane = {pole.name for pole in fields(Wydanie)}
+    return Wydanie(**{**asdict(wzor),
+                      **{k: v for k, v in dane.items() if k in znane}})
+
+
+def biezace() -> Wydanie:
+    global _biezace
+    if _biezace is None:
+        _biezace = _z_paczki()
+    if _biezace is None:
+        kod = os.environ.get("WHISPER_AUTOMAT_WYDANIE") or DOMYSLNE
+        _biezace = WYDANIA.get(kod.strip().lower(), WYDANIA[DOMYSLNE])
+    return _biezace
+
+
+def zapisz(wydanie: Wydanie, cel: Path) -> Path:
+    """Zapisuje plik wydania do włożenia w paczkę (używa build_exe.py)."""
+    cel.parent.mkdir(parents=True, exist_ok=True)
+    cel.write_text(
+        json.dumps(asdict(wydanie), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return cel
