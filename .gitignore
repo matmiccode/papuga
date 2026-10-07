@@ -45,3 +45,6 @@ tools/podpis_firmy.local.txt
 
 # Spis licencji skladnikow - generowany przez tools/licencje.py przy budowie i publikacji
 LICENCJE.txt
+
+# Lokalna lista slow, ktorych nie wolno opublikowac (nazwa firmy itp.)
+tools/zakazane.local.txt

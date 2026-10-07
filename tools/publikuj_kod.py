@@ -176,8 +176,9 @@ def main() -> int:
     parser.add_argument("--utworz", action="store_true", help="Załóż repozytorium, gdy go nie ma.")
     parser.add_argument("--bez-push", action="store_true", help="Zostaw commit lokalnie.")
     parser.add_argument("--pages", action="store_true", help="Włącz GitHub Pages z docs/.")
-    parser.add_argument("--zakazane", type=Path, default=None,
-                        help="Plik z dodatkowymi słowami, których nie wolno opublikować.")
+    parser.add_argument("--zakazane", type=Path, default=ROOT / "tools" / "zakazane.local.txt",
+                        help="Plik z dodatkowymi słowami, których nie wolno opublikować "
+                             "(domyślnie tools/zakazane.local.txt, ignorowany przez gita).")
     parser.add_argument("--tylko-sprawdz", action="store_true",
                         help="Zbuduj migawkę i przeszukaj ją, bez dotykania repozytorium publicznego.")
     args = parser.parse_args()
