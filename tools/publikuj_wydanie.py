@@ -16,9 +16,8 @@ Skrypt:
      widzi wyłącznie wydania opublikowane, więc szkic nikomu niczego nie
      zaproponuje.
 
-Potrzebny jest `gh` zalogowany na konto, do którego należy repozytorium:
-`matmiccode`. Na maszynie deweloperskiej domyślnie aktywne jest inne
-(firmowe) konto — najpierw `gh auth switch --user matmiccode`.
+Potrzebny jest `gh` zalogowany na konto właściciela repozytorium, `matmiccode`
+(`gh auth status`; w razie potrzeby `gh auth login`).
 """
 
 from __future__ import annotations

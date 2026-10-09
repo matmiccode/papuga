@@ -106,21 +106,12 @@ def diagnose() -> Diagnosis:
         checks.append(
             Check("faster-whisper", OK, f"wersja {_version_of('faster-whisper')}")
         )
-    elif _installed("whisper"):
-        checks.append(
-            Check(
-                "faster-whisper",
-                WARN,
-                "brak — będzie użyty wolniejszy openai-whisper",
-                "Uruchom setup.bat, żeby doinstalować faster-whisper.",
-            )
-        )
     else:
         checks.append(
             Check(
-                "silnik Whisper",
+                "faster-whisper",
                 FAIL,
-                "nie zainstalowano ani faster-whisper, ani openai-whisper",
+                "nie zainstalowano silnika transkrypcji",
                 "Uruchom setup.bat.",
             )
         )
@@ -210,6 +201,42 @@ def diagnose() -> Diagnosis:
                 "funkcji — potrzebny dostęp do github.com.",
             )
         )
+
+    # --- nagrywanie spotkań (tylko wydania, które je mają) ---
+    if WYDANIE.nagrywanie:
+        from . import nagrywanie
+
+        if not nagrywanie.dostepne():
+            checks.append(
+                Check(
+                    "Nagrywanie spotkań",
+                    FAIL,
+                    "brak biblioteki PyAudioWPatch — przycisk nagrywania nie zadziała",
+                    "Uruchom setup.bat albo: pip install PyAudioWPatch",
+                )
+            )
+        else:
+            try:
+                wejscia, wyjscia = nagrywanie.lista_urzadzen()
+                mik = nagrywanie._znajdz(wejscia, "")
+                wy = nagrywanie._znajdz(wyjscia, "")
+                opis = (f"PyAudioWPatch {_version_of('PyAudioWPatch')}; mikrofon: "
+                        f"{mik.nazwa if mik else 'brak'}; dźwięk systemowy z: "
+                        f"{wy.nazwa if wy else 'brak'}"
+                        + ("" if wy is None or wy.loopback_index is not None
+                           else " (bez loopbacku)"))
+                stan = OK if mik is not None or (wy and wy.loopback_index is not None) else WARN
+                checks.append(Check("Nagrywanie spotkań", stan, opis,
+                                    "" if stan == OK else "Podłącz mikrofon albo słuchawki."))
+            except Exception as exc:
+                checks.append(
+                    Check(
+                        "Nagrywanie spotkań",
+                        WARN,
+                        f"nie udało się odczytać urządzeń WASAPI: {exc}",
+                        "Sprawdź w Ustawieniach Windows, czy urządzenia dźwięku działają.",
+                    )
+                )
 
     # --- modele ---
     from .download import rozmiar_opis
@@ -320,18 +347,10 @@ def _cached_models() -> List[str]:
 
     found = set(modele_lokalne(models_dir()))
 
-    for item in models_dir().glob("*.pt"):
-        found.add(item.stem)
-
     hf = Path.home() / ".cache" / "huggingface" / "hub"
     if hf.is_dir():
         for item in hf.glob("models--*whisper*"):
             found.add(_bez_prefiksu(item.name.split("--")[-1]))
-
-    openai_cache = Path.home() / ".cache" / "whisper"
-    if openai_cache.is_dir():
-        for item in openai_cache.glob("*.pt"):
-            found.add(f"{item.stem} (openai-whisper)")
 
     return sorted(n for n in found if n)
 

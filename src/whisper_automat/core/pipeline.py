@@ -18,7 +18,7 @@ from .engine import (
     EngineError,
     Transcriber,
     TranscriptionResult,
-    available_engines,
+    engine_available,
     modele_lokalne,
     summarize,
 )
@@ -35,15 +35,13 @@ DIAR_TRANSCRIBE_WEIGHT = 0.25
 DIAR_SPEAKERS_WEIGHT = 0.70
 
 
-def model_do_pobrania(model: str, engine: str = "auto") -> bool:
+def model_do_pobrania(model: str) -> bool:
     """Czy model trzeba ściągnąć, zanim silnik go załaduje.
 
     Dotyczy wersji lekkiej, która nie ma modelu w środku. Wersja offline ma
     go w paczce, więc tu dostaje False i nigdy nie idzie do sieci.
     """
-    if engine not in ("auto", "faster-whisper"):
-        return False
-    if "faster-whisper" not in available_engines():
+    if not engine_available():
         return False
     if model not in download.REPOZYTORIA:
         return False
@@ -108,7 +106,6 @@ class Runner:
                 model=model,
                 device=device,
                 compute_type=compute,
-                engine=self.settings.engine,
                 log=self.cb.log,
             )
         except Cancelled:
@@ -137,7 +134,6 @@ class Runner:
                     model=zapasowy,
                     device=device,
                     compute_type=compute,
-                    engine=self.settings.engine,
                     log=self.cb.log,
                 )
             except EngineError as zapasowy_exc:
@@ -172,7 +168,7 @@ class Runner:
         Niepowodzenie zgłasza jako EngineError — wtedy `run` sięga po
         model zapasowy, tak samo jak przy nieudanym ładowaniu.
         """
-        if not model_do_pobrania(model, self.settings.engine):
+        if not model_do_pobrania(model):
             return
 
         def postep(pobrane: int, wszystkie: int, predkosc: float) -> None:

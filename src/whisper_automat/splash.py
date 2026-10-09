@@ -13,7 +13,7 @@ from typing import Optional
 
 from .core.config import APP_NAME, WYDANIE, asset
 
-from .theme import ACCENT, BG, FG, FG_DIM
+from .theme import ACCENT, BG, FG, FG_DIM, FONT, FONT_SEMI
 from .theme import BG_INPUT as BG_TOR
 from .theme import BORDER_DROP as OBRAMOWANIE
 
@@ -48,22 +48,23 @@ class Splash:
         else:
             tk.Label(wnetrze, text="", bg=BG).pack(pady=(30, 0))
 
+        # Te same kroje co w oknie głównym (theme.Title/Subtitle).
         tk.Label(
             wnetrze,
             text=APP_NAME,
             bg=BG,
             fg=FG,
-            font=("Segoe UI", 16, "bold"),
+            font=(FONT_SEMI, 16),
         ).pack()
 
         if WYDANIE.haslo:
             tk.Label(
-                wnetrze, text=WYDANIE.haslo, bg=BG, fg=FG_DIM, font=("Segoe UI", 10)
+                wnetrze, text=WYDANIE.haslo, bg=BG, fg=FG_DIM, font=(FONT, 10)
             ).pack()
 
         if podpis:
             tk.Label(
-                wnetrze, text=podpis, bg=BG, fg=FG_DIM, font=("Segoe UI", 8)
+                wnetrze, text=podpis, bg=BG, fg=FG_DIM, font=(FONT, 8)
             ).pack(pady=(2, 0))
 
         self._status = tk.StringVar(value="Uruchamianie…")
@@ -72,7 +73,7 @@ class Splash:
             textvariable=self._status,
             bg=BG,
             fg=FG_DIM,
-            font=("Segoe UI", 9),
+            font=(FONT, 9),
         ).pack(pady=(14, 8))
 
         self._canvas = tk.Canvas(

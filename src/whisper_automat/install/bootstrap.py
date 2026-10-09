@@ -34,6 +34,8 @@ BASE_PACKAGES = [
     "truststore>=0.9",
     # Rozpoznawanie mówców — wariant procesorowy, bo na GPU jest wolniej.
     "sherpa-onnx>=1.12",
+    # Nagrywanie spotkań: mikrofon + dźwięk systemowy (WASAPI loopback).
+    "PyAudioWPatch>=0.2.12.9",
 ]
 
 #: Biblioteki CUDA, których CTranslate2 potrzebuje na Windows.
@@ -41,9 +43,6 @@ CUDA_PACKAGES = [
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12>=9.0",
 ]
-
-#: Referencyjny silnik OpenAI — opcjonalny, bo ciągnie za sobą całego torcha.
-OPENAI_PACKAGES = ["openai-whisper"]
 
 FFMPEG_WINGET_ID = "Gyan.FFmpeg"
 
@@ -296,7 +295,7 @@ def create_venv(recreate: bool = False) -> bool:
     return True
 
 
-def install_packages(hw, force_cpu: bool = False, with_openai: bool = False) -> bool:
+def install_packages(hw, force_cpu: bool = False) -> bool:
     step("Instaluję pakiety")
     python = venv_python()
 
@@ -316,9 +315,6 @@ def install_packages(hw, force_cpu: bool = False, with_openai: bool = False) -> 
         info("Po aktualizacji sterownika uruchom setup.bat ponownie.")
     else:
         info("Konfiguracja procesorowa — bez bibliotek CUDA (1,3 GB mniej).")
-    if with_openai:
-        packages += OPENAI_PACKAGES
-        info("Dokładam openai-whisper jako silnik zapasowy (pobierze też torcha).")
 
     try:
         run([str(python), "-m", "pip", "install", "--upgrade", "pip", "wheel"],
@@ -402,8 +398,6 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Zbuduj środowisko od zera.")
     parser.add_argument("--no-model", action="store_true",
                         help="Nie pobieraj modelu podczas instalacji.")
-    parser.add_argument("--with-openai-whisper", action="store_true",
-                        help="Zainstaluj też referencyjny openai-whisper (+torch).")
     parser.add_argument("--no-ffmpeg-install", action="store_true",
                         help="Nie próbuj instalować ffmpeg przez winget.")
     args = parser.parse_args(argv if argv is not None else sys.argv[1:])
@@ -418,8 +412,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not create_venv(recreate=args.recreate):
         return 1
-    if not install_packages(hw, force_cpu=args.cpu,
-                            with_openai=args.with_openai_whisper):
+    if not install_packages(hw, force_cpu=args.cpu):
         return 1
 
     download_model(rec.model, skip=args.no_model)

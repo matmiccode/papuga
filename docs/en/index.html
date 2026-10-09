@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Papuga – offline transcription</title>
+<meta name="description" content="Turns recordings into text and tells who is speaking. Works on your own computer, without internet and without the cloud. A free, open-source Windows app.">
+<link rel="icon" href="../favicon.ico">
+<link rel="alternate" hreflang="pl" href="https://matmiccode.github.io/papuga/">
+<link rel="alternate" hreflang="en" href="https://matmiccode.github.io/papuga/en/">
+<link rel="alternate" hreflang="x-default" href="https://matmiccode.github.io/papuga/">
+<meta property="og:title" content="Papuga – offline transcription">
+<meta property="og:description" content="Turns recordings into text and tells who is speaking. Works on your own computer, without internet and without the cloud.">
+<meta property="og:image" content="https://matmiccode.github.io/papuga/img/okno.png">
+<meta property="og:type" content="website">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/v1/matcode.css">
+<link rel="stylesheet" href="../papuga.css">
+</head>
+<body>
+
+<header class="wrap top">
+  <a class="marka" href="./"><img src="../img/papuga-256.png" alt="" width="36" height="36">Papuga</a>
+  <nav>
+    <a href="#how">How it works</a>
+    <a href="#privacy" class="ukryj-mobile">Privacy</a>
+    <a href="https://github.com/matmiccode/papuga" class="ukryj-mobile">Code</a>
+    <a class="jezyk" href="../" lang="pl" hreflang="pl" title="Wersja polska">PL</a>
+    <a class="btn btn-primary btn-sm" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Download</a>
+  </nav>
+</header>
+
+<main>
+
+<section class="wrap hero">
+  <div>
+    <h1>Turns recordings into text. On your own computer.</h1>
+    <p class="lead">Papuga recognises speech and labels who said what. It sends nothing to the cloud: after a one-time model download it works entirely offline.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Download Papuga for Windows</a>
+      <a class="btn btn-quiet" href="https://github.com/matmiccode/papuga">Source code</a>
+    </div>
+    <p class="drobne"><span data-wersja>Version 1.2.0</span> · Windows 10 and 11, 64-bit · free, MIT license · interface in Polish</p>
+  </div>
+
+  <div class="demo" aria-label="Example transcript with recognised speakers">
+    <div class="demo-naglowek"><strong>Team meeting 2026-09-28.m4a</strong><span>48:05</span></div>
+    <div class="demo-pasek" role="presentation"></div>
+    <ul class="transkrypt">
+      <li><time>0:00</time><b>Anna</b><span>All right, let's start. Marek, how's the schedule?</span></li>
+      <li><time>0:06</time><b>Marek</b><span>Prototype on Thursday, tests on Friday morning.</span></li>
+      <li><time>0:12</time><b>Anna</b><span>So the demo for the board on Monday is realistic?</span></li>
+      <li><time>0:15</time><b>Marek</b><span>Realistic, if Kasia finishes the interface translation.</span></li>
+      <li><time>0:19</time><b>Kasia</b><span>I will. I just need the final list of screens.</span></li>
+      <li class="gotowe"><span>✓ Done, 11.8× faster than the recording</span></li>
+    </ul>
+  </div>
+</section>
+
+<section id="how">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Three steps</h2>
+      <p>No account, no configuration, nothing to learn.</p>
+    </div>
+    <ol class="kroki">
+      <li>
+        <h3>Drag in your recordings</h3>
+        <p>Audio or video, single files or a whole folder. MP4, MKV, MOV, MP3, WAV, M4A and a dozen other formats.</p>
+      </li>
+      <li>
+        <h3>Pick the text format</h3>
+        <p>Text with timestamps, plain text, SRT or VTT subtitles for a video, JSON with the full data.</p>
+      </li>
+      <li>
+        <h3>Click Transcribe</h3>
+        <p>The finished files land in the output folder. With several recordings you can walk away from the computer; the app shows how much is left.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>What it does</h2>
+    </div>
+    <dl class="cechy">
+      <div>
+        <dt>Tells who is speaking</dt>
+        <dd>Splits a conversation into people. After the recording you listen to a sample of each voice and type a name, which goes into the text and the subtitles.</dd>
+      </div>
+      <div>
+        <dt>Polish and ten other languages</dt>
+        <dd>English, German, Ukrainian, Czech, Slovak, French, Spanish, Italian, Russian, or automatic detection.</dd>
+      </div>
+      <div>
+        <dt>Better with names and acronyms</dt>
+        <dd>Type them into the Context field and the model will use them instead of guessing by ear.</dd>
+      </div>
+      <div>
+        <dt>Picks the model for your computer</dt>
+        <dd>With an NVIDIA card it runs a dozen times faster than the recording. Without one it works on the processor: slower, but just as accurate.</dd>
+      </div>
+      <div>
+        <dt>Queue</dt>
+        <dd>Drop in several recordings at once, remove from the queue while it works, see the remaining time.</dd>
+      </div>
+      <div>
+        <dt>Keeps itself up to date</dt>
+        <dd>Once a day it checks for a new version and installs only releases signed with the author's key.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="window">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>What it looks like</h2>
+      <p>Queue on the left, settings on the right, progress at the bottom. The bar in feather colours shows the current file. The interface is in Polish for now; English is on the way.</p>
+    </div>
+    <figure>
+      <img src="../img/okno.png" alt="The Papuga window: a queue of four recordings with statuses, the settings panel and a progress bar in feather colours" width="1102" height="852">
+      <figcaption>Papuga 1.1 on Windows 11 (Polish interface).</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="privacy">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Privacy</h2>
+      <p>Recordings of meetings, interviews and conversations are often things that shouldn't go to someone else's servers. Papuga doesn't send them.</p>
+    </div>
+    <dl class="cechy">
+      <div>
+        <dt>Everything runs locally</dt>
+        <dd>Speech and voice recognition run on your processor or graphics card. Recordings and texts never leave the computer.</dd>
+      </div>
+      <div>
+        <dt>Two connections, both in the open</dt>
+        <dd>Once, on first start, it downloads the model from huggingface.co. Once a day it asks github.com for a new version, without login and without identifiers.</dd>
+      </div>
+      <div>
+        <dt>Open source</dt>
+        <dd>The code is public under the MIT license. Anyone can check what the app does and build it themselves.</dd>
+      </div>
+      <div>
+        <dt>Signed releases</dt>
+        <dd>An update is installed only when the release is signed with the author's key built into the app. A GitHub account alone is not enough.</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <div class="sekcja-naglowek">
+      <h2>Before you download</h2>
+    </div>
+    <table>
+      <tr><th>System</th><td>Windows 10 or 11, 64-bit</td></tr>
+      <tr><th>Memory</th><td>8 GB RAM</td></tr>
+      <tr><th>Disk space</th><td>about 4 GB: the app 1.1 GB and the model 1.6 GB, downloaded on first start</td></tr>
+      <tr><th>Graphics card</th><td>NVIDIA with driver 527 or newer speeds things up a dozen times. Not required.</td></tr>
+      <tr><th>Language</th><td>interface in Polish (English is on the way); transcribes Polish, English and nine other languages</td></tr>
+    </table>
+    <div class="uwaga odstep">
+      <p><strong>Windows will warn you on first install</strong> (“Windows protected your PC”), because the installer has no paid publisher certificate. Click <em>More info</em>, then <em>Run anyway</em>. The installation needs no administrator rights and asks no questions.</p>
+    </div>
+    <div class="cta odstep-duzy">
+      <a class="btn btn-primary" href="https://github.com/matmiccode/papuga/releases/latest" data-pobierz>Download Papuga for Windows</a>
+      <a class="btn btn-quiet" href="https://github.com/matmiccode/papuga/releases">All releases and changes</a>
+    </div>
+    <p class="muted small" style="margin-top: 16px;">A problem or an idea? <a href="https://github.com/matmiccode/papuga/issues/new">Write on GitHub</a>.</p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>MATCODE · <a href="https://matmiccode.github.io/en/">other apps</a></div>
+    <nav>
+      <a href="https://buycoffee.to/matcode">Buy the author a coffee</a>
+      <a href="https://github.com/matmiccode/papuga/blob/main/LICENCJE.txt">Third-party licenses</a>
+      <a href="https://github.com/matmiccode/papuga/blob/main/LICENSE">MIT license</a>
+      <a href="https://github.com/matmiccode">GitHub</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+// Version number and a direct link to the installer from the latest release.
+// Without a response (offline, API limit) the values written into the page stay.
+(async () => {
+  try {
+    const odp = await fetch("https://api.github.com/repos/matmiccode/papuga/releases/latest",
+                            { headers: { Accept: "application/vnd.github+json" } });
+    if (!odp.ok) return;
+    const dane = await odp.json();
+    const wersja = String(dane.tag_name || "").replace(/^v/, "");
+    const plik = (dane.assets || []).find(z => /^Papuga-[\d.]+-Setup\.exe$/.test(z.name));
+    if (wersja) document.querySelectorAll("[data-wersja]").forEach(e => { e.textContent = "Version " + wersja; });
+    if (plik) document.querySelectorAll("[data-pobierz]").forEach(e => { e.href = plik.browser_download_url; });
+  } catch (_) { /* the page works without it */ }
+})();
+</script>
+</body>
+</html>

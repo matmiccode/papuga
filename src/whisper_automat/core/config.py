@@ -127,7 +127,6 @@ class Settings:
     model: str = ""              # pusty = użyj rekomendacji sprzętowej
     device: str = ""             # pusty = użyj rekomendacji
     compute_type: str = ""       # pusty = użyj rekomendacji
-    engine: str = "auto"
     language: str = "pl"
     initial_prompt: str = ""
     formats: List[str] = field(default_factory=lambda: ["txt", "srt"])
@@ -149,6 +148,12 @@ class Settings:
     aktualizacje_sprawdzone: float = 0.0
     #: Wersja, którą użytkownik kazał pominąć — pasek o niej już nie wraca.
     pominieta_wersja: str = ""
+    #: Nagrywanie spotkań (wydania z Wydanie.nagrywanie): nazwy urządzeń
+    #: z listy WASAPI, puste = domyślne systemowe.
+    nagranie_mikrofon: str = ""
+    nagranie_glosniki: str = ""
+    #: Po zatrzymaniu nagrania od razu uruchom transkrypcję.
+    nagranie_transkrybuj: bool = True
 
     # -- trwałość ----------------------------------------------------------
 

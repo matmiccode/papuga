@@ -88,6 +88,7 @@ COLLECT_ALL = [
     "truststore",     # weryfikacja certyfikatów przez magazyn Windows
     "certifi",
     "sherpa_onnx",    # rozpoznawanie mówców (biblioteki natywne + modele)
+    "pyaudiowpatch",  # nagrywanie spotkań: PortAudio z WASAPI loopback (.pyd)
 ]
 
 #: Biblioteki CUDA. Kopiujemy je z zachowaniem układu nvidia/<pakiet>/bin,
@@ -447,7 +448,10 @@ def main() -> int:
     args = parser.parse_args()
     WYD = WYDANIA[args.wydanie]
     if WYD.kod == "firma":
-        WYD = replace(WYD, wydawca=podpis_firmy())
+        # Ten sam tekst podpisuje plik .exe i instalator (wydawca) oraz
+        # stopkę okna (autor).
+        podpis = podpis_firmy()
+        WYD = replace(WYD, wydawca=podpis, autor=podpis)
 
     if os.name != "nt":
         raise SystemExit("Budowanie działa tylko na Windows.")

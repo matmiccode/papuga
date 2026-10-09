@@ -138,6 +138,18 @@ def zastosuj(root: tk.Misc) -> ttk.Style:
               darkcolor=[("disabled", BG_INPUT), ("active", ACCENT_HOVER)],
               bordercolor=[("disabled", BG_INPUT)],
               foreground=[("disabled", FG_FAINT)])
+    # „Zatrzymaj nagranie”: czerwony, bo kończy coś, co właśnie trwa.
+    # Rozmiar zwykłego przycisku — głośny ma być kolor, nie bryła.
+    czerwony_hover, czerwony_pressed = "#e86b6b", "#c74a4a"
+    plaski("Stop.TButton", ERR_COLOR, foreground="#ffffff", font=(FONT_SEMI, 10),
+           padding=(14, 7), borderwidth=0, focusthickness=0)
+    style.map("Stop.TButton",
+              background=[("disabled", BG_INPUT), ("pressed", czerwony_pressed),
+                          ("active", czerwony_hover)],
+              lightcolor=[("disabled", BG_INPUT), ("active", czerwony_hover)],
+              darkcolor=[("disabled", BG_INPUT), ("active", czerwony_hover)],
+              bordercolor=[("disabled", BG_INPUT)],
+              foreground=[("disabled", FG_FAINT)])
 
     # Pola wyboru i liczby.
     for nazwa in ("TCombobox", "TSpinbox"):

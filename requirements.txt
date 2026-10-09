@@ -2,7 +2,8 @@
 # Nie instaluj ich ręcznie w systemowym Pythonie — instalator dobiera
 # dodatkowo biblioteki CUDA w zależności od wykrytej karty graficznej.
 
-# Silnik transkrypcji (CTranslate2) — szybszy i lżejszy niż openai-whisper
+# Silnik transkrypcji (CTranslate2) — jedyny; szybszy i lżejszy niż
+# referencyjna implementacja OpenAI
 faster-whisper>=1.1.0
 
 # Przeciąganie plików do okna programu
@@ -16,9 +17,10 @@ truststore>=0.9
 # pokazały, że na GPU ta akurat operacja idzie wolniej.
 sherpa-onnx>=1.12
 
+# Nagrywanie spotkań: mikrofon + dźwięk systemowy (WASAPI loopback).
+# PortAudio z łatą na loopback, statycznie w jednym .pyd, tylko Windows.
+PyAudioWPatch>=0.2.12.9; sys_platform == "win32"
+
 # --- tylko na komputerach z kartą NVIDIA (dokłada je bootstrap.py) ---
 # nvidia-cublas-cu12
 # nvidia-cudnn-cu12>=9.0
-
-# --- opcjonalny silnik zapasowy: setup.bat --with-openai-whisper ---
-# openai-whisper

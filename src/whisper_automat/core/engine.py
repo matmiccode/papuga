@@ -1,9 +1,9 @@
-"""Silnik transkrypcji.
+"""Silnik transkrypcji: `faster-whisper` (CTranslate2).
 
-Domyślnie używa `faster-whisper` (CTranslate2) — na tym samym modelu jest
-kilkukrotnie szybszy i zużywa dużo mniej VRAM niż referencyjny `openai-whisper`,
-co ma znaczenie na kartach z 4-6 GB pamięci. Gdy `faster-whisper` nie jest
-dostępny, moduł spada na `openai-whisper`.
+Jeden silnik, bez zapasowego. Na tym samym modelu jest kilkukrotnie szybszy
+i zużywa dużo mniej VRAM niż referencyjna implementacja OpenAI, co ma
+znaczenie na kartach z 4-6 GB pamięci. Dawna gałąź zapasowa (openai-whisper
+z torchem) została usunięta — nie była instalowana i tylko rozgałęziała kod.
 """
 
 from __future__ import annotations
@@ -104,8 +104,8 @@ def prepare_cuda_libraries() -> List[str]:
     """Dokłada katalogi z DLL-ami CUDA do ścieżki wyszukiwania bibliotek.
 
     CTranslate2 na Windows potrzebuje cuBLAS i cuDNN. Trafiają one na dysk
-    razem z pakietami `nvidia-*-cu12` albo z torchem, ale Python nie szuka
-    tam DLL-i sam — trzeba je zarejestrować przed importem ctranslate2.
+    razem z pakietami `nvidia-*-cu12`, ale Python nie szuka tam DLL-i sam —
+    trzeba je zarejestrować przed importem ctranslate2.
     """
     global _dll_dirs_ready
     if _dll_dirs_ready or os.name != "nt":
@@ -135,9 +135,6 @@ def prepare_cuda_libraries() -> List[str]:
             continue
         roots.extend(glob.glob(os.path.join(base, "nvidia", "*", "bin")))
         roots.extend(glob.glob(os.path.join(base, "nvidia", "*", "lib")))
-        torch_lib = os.path.join(base, "torch", "lib")
-        if os.path.isdir(torch_lib):
-            roots.append(torch_lib)
 
     added: List[str] = []
     for root in roots:
@@ -155,16 +152,15 @@ def prepare_cuda_libraries() -> List[str]:
     return added
 
 
-def available_engines() -> List[str]:
-    """Które silniki da się w tym środowisku zaimportować."""
+#: Nazwa silnika — trafia do wyników (JSON) i do dziennika.
+ENGINE = "faster-whisper"
+
+
+def engine_available() -> bool:
+    """Czy faster-whisper da się w tym środowisku zaimportować."""
     import importlib.util
 
-    engines = []
-    if importlib.util.find_spec("faster_whisper") is not None:
-        engines.append("faster-whisper")
-    if importlib.util.find_spec("whisper") is not None:
-        engines.append("openai-whisper")
-    return engines
+    return importlib.util.find_spec("faster_whisper") is not None
 
 
 #: Na co schodzić, gdy karta nie obsługuje żądanej precyzji. Kolejność jest
@@ -253,12 +249,6 @@ def cuda_ready() -> bool:
 
         return ctranslate2.get_cuda_device_count() > 0
     except Exception:
-        pass
-    try:
-        import torch
-
-        return bool(torch.cuda.is_available())
-    except Exception:
         return False
 
 
@@ -274,7 +264,6 @@ class Transcriber:
         self.models_dir = Path(models_dir) if models_dir else None
         self._model = None
         self._key = None
-        self._engine = ""
 
     # -- ładowanie ---------------------------------------------------------
 
@@ -283,52 +272,38 @@ class Transcriber:
         model: str,
         device: str = "cuda",
         compute_type: str = "float16",
-        engine: str = "auto",
         log: Optional[Callable[[str], None]] = None,
     ) -> str:
-        """Ładuje model. Zwraca nazwę faktycznie użytego silnika."""
+        """Ładuje model. Zwraca nazwę silnika (do dziennika)."""
         log = log or (lambda _m: None)
 
-        engines = available_engines()
-        if not engines:
+        if not engine_available():
             raise EngineError(
                 "Brak silnika transkrypcji. Uruchom setup.bat, żeby zainstalować "
                 "faster-whisper."
-            )
-
-        if engine == "auto":
-            engine = engines[0]
-        elif engine not in engines:
-            raise EngineError(
-                f"Silnik {engine} nie jest zainstalowany (dostępne: "
-                f"{', '.join(engines)})."
             )
 
         if device == "cuda" and not cuda_ready():
             log("GPU niedostępne dla silnika — przechodzę na CPU.")
             device, compute_type = "cpu", "int8"
 
-        if engine == "faster-whisper":
-            prepare_cuda_libraries()
-            compute_type, note = resolve_compute_type(device, compute_type)
-            if note:
-                log(note)
+        prepare_cuda_libraries()
+        compute_type, note = resolve_compute_type(device, compute_type)
+        if note:
+            log(note)
 
-        key = (engine, model, device, compute_type)
+        key = (model, device, compute_type)
         if key == self._key and self._model is not None:
-            return self._engine
+            return ENGINE
 
         self._model = None  # zwolnij VRAM przed załadowaniem nowego modelu
         self._key = None
 
-        log(f"Ładuję model {model} ({engine}, {device}, {compute_type})…")
+        log(f"Ładuję model {model} ({device}, {compute_type})…")
         start = time.time()
 
         try:
-            if engine == "faster-whisper":
-                self._model = self._load_faster(model, device, compute_type)
-            else:
-                self._model = self._load_openai(model, device)
+            self._model = self._load_faster(model, device, compute_type)
         except Exception as exc:
             from .network import opisz_blad_sieci
 
@@ -340,22 +315,17 @@ class Transcriber:
             if device == "cuda":
                 log(f"Nie udało się użyć GPU ({_short(exc)}). Próbuję na CPU…")
                 device, compute_type = "cpu", "int8"
-                if engine == "faster-whisper":
-                    compute_type, _note = resolve_compute_type(device, compute_type)
+                compute_type, _note = resolve_compute_type(device, compute_type)
                 try:
-                    if engine == "faster-whisper":
-                        self._model = self._load_faster(model, device, compute_type)
-                    else:
-                        self._model = self._load_openai(model, device)
+                    self._model = self._load_faster(model, device, compute_type)
                 except Exception as cpu_exc:
                     raise EngineError(_blad_ladowania(model, cpu_exc)) from cpu_exc
             else:
                 raise EngineError(_blad_ladowania(model, exc)) from exc
 
-        self._key = (engine, model, device, compute_type)
-        self._engine = engine
+        self._key = (model, device, compute_type)
         log(f"Model gotowy w {time.time() - start:.1f} s.")
-        return engine
+        return ENGINE
 
     def _load_faster(self, model: str, device: str, compute_type: str):
         prepare_cuda_libraries()
@@ -411,31 +381,15 @@ class Transcriber:
                 return str(katalog)
         return None
 
-    def _load_openai(self, model: str, device: str):
-        import whisper
-
-        # openai-whisper nie zna nazwy "large-v3-turbo" — używa aliasu "turbo".
-        name = "turbo" if model == "large-v3-turbo" else model
-        kwargs = {"device": device}
-        if self.models_dir:
-            kwargs["download_root"] = str(self.models_dir)
-        return whisper.load_model(name, **kwargs)
-
     @property
     def current(self):
-        """(engine, model, device, compute_type) albo None."""
+        """(model, device, compute_type) albo None."""
         return self._key
 
     def unload(self) -> None:
+        """Zwalnia model (i VRAM) — CTranslate2 oddaje pamięć z obiektem."""
         self._model = None
         self._key = None
-        try:
-            import torch
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except Exception:
-            pass
 
     # -- transkrypcja ------------------------------------------------------
 
@@ -456,27 +410,21 @@ class Transcriber:
         if self._model is None or self._key is None:
             raise EngineError("Model nie został załadowany — wywołaj load().")
 
-        engine, model_name, device, compute_type = self._key
+        model_name, device, compute_type = self._key
         result = TranscriptionResult(
             source=Path(source_path or audio_path),
             duration=duration,
             model=model_name,
             device=device,
             compute_type=compute_type,
-            engine=engine,
+            engine=ENGINE,
         )
 
         start = time.time()
-        if engine == "faster-whisper":
-            self._run_faster(
-                result, audio_path, language, initial_prompt, beam_size,
-                vad_filter, word_timestamps, on_progress, on_segment, cancel,
-            )
-        else:
-            self._run_openai(
-                result, audio_path, language, initial_prompt, device,
-                word_timestamps, on_progress, on_segment, cancel,
-            )
+        self._run_faster(
+            result, audio_path, language, initial_prompt, beam_size,
+            vad_filter, word_timestamps, on_progress, on_segment, cancel,
+        )
         result.elapsed = time.time() - start
 
         if not result.duration and result.segments:
@@ -520,41 +468,6 @@ class Transcriber:
                 on_segment(item)
             if on_progress and total > 0:
                 on_progress(min(item.end / total, 0.999))
-
-    def _run_openai(
-        self, result, audio_path, language, initial_prompt, device,
-        word_timestamps, on_progress, on_segment, cancel,
-    ):
-        # openai-whisper nie udostępnia strumienia segmentów ani anulowania
-        # w trakcie — postęp raportujemy dopiero po zakończeniu przebiegu.
-        if cancel is not None and cancel():
-            raise Cancelled("Transkrypcja przerwana przez użytkownika.")
-
-        raw = self._model.transcribe(
-            str(audio_path),
-            language=language or None,
-            initial_prompt=initial_prompt or None,
-            fp16=(device == "cuda"),
-            word_timestamps=word_timestamps,
-            condition_on_previous_text=False,
-        )
-        result.language = raw.get("language", language or "")
-        result.language_probability = 1.0
-
-        for seg in raw.get("segments", []):
-            item = Segment(
-                start=float(seg["start"]),
-                end=float(seg["end"]),
-                text=seg["text"],
-                words=[
-                    Word(float(w["start"]), float(w["end"]), w["word"])
-                    for w in (seg.get("words") or [])
-                ],
-            )
-            result.segments.append(item)
-            if on_segment:
-                on_segment(item)
-
 
 def _blad_ladowania(model: str, exc: BaseException) -> str:
     """Komunikat o nieudanym załadowaniu modelu.

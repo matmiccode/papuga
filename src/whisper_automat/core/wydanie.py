@@ -1,7 +1,8 @@
 """Wydania programu — jeden kod, dwie marki.
 
   * firma    — „Whisper Automat”: wersja firmowa, z modelem w instalatorze,
-               bez sprawdzania aktualizacji (firewall i tak by je blokował).
+               bez sprawdzania aktualizacji (firewall i tak by je blokował),
+               z nagrywaniem spotkań prosto w oknie.
   * papuga   — „Papuga – transkrypcje offline”: wersja publiczna z GitHuba,
                model pobierany przy pierwszym uruchomieniu, aktualizacje,
                link do wsparcia.
@@ -18,6 +19,9 @@ Spakowany program bierze z `wydanie.json` wszystkie pola, nie tylko kod.
 Dzięki temu podpis z imieniem i nazwiskiem autora (wydanie firmowe) żyje
 tylko w lokalnym pliku `tools/podpis_firmy.local.txt` — poza repozytorium —
 i trafia wyłącznie do paczki firmowej, nie do kodu wkładanego w Papugę.
+Uruchomione z kodu wydanie firmowe bierze ten podpis ze zmiennej
+WHISPER_AUTOMAT_PODPIS_FIRMY (ustawia ją np. tools/zrzut_okna.py), a bez
+niej podpisuje się samym MATCODE.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from pathlib import Path
 from typing import Optional
 
@@ -63,6 +67,13 @@ class Wydanie:
     #: Jedno-dwa zdania o programie: opis na GitHubie, ekran powitalny
     #: instalatora, opis pliku .exe.
     opis: str = ""
+    #: Podpis autora w stopce okna (np. imię, nazwisko i firma). Gdy pusty,
+    #: nagłówek pokazuje samego wydawcę. Wydanie firmowe dostaje go z paczki
+    #: (patrz opis modułu), publiczne nie ma go wcale.
+    autor: str = ""
+    #: Nagrywanie spotkań w oknie: mikrofon i dźwięk systemowy prosto do
+    #: kolejki transkrypcji (core/nagrywanie.py).
+    nagrywanie: bool = False
 
     @property
     def pelna_nazwa(self) -> str:
@@ -95,7 +106,11 @@ WYDANIA = {
         # Ten sam, którego używały wersje 1.0.x — aktualizacja wersji
         # firmowej ma dalej nadpisywać istniejącą instalację.
         inno_id="{7C2F1A64-5D3B-4E82-9A17-6B0E4C9D2F31}",
-        # Pełny podpis dokłada build_exe.py — patrz opis modułu.
+        # Pełny podpis (wydawca i autor) dokłada build_exe.py — patrz opis modułu.
+        haslo="transkrypcje i nagrania spotkań",
+        opis=("Nagrywa spotkania i zamienia nagrania w tekst, rozpoznając, "
+              "kto mówi. Działa na komputerze, bez internetu."),
+        nagrywanie=True,
     ),
     "papuga": Wydanie(
         kod="papuga",
@@ -145,6 +160,9 @@ def biezace() -> Wydanie:
     if _biezace is None:
         kod = os.environ.get("WHISPER_AUTOMAT_WYDANIE") or DOMYSLNE
         _biezace = WYDANIA.get(kod.strip().lower(), WYDANIA[DOMYSLNE])
+        podpis = os.environ.get("WHISPER_AUTOMAT_PODPIS_FIRMY", "").strip()
+        if podpis and _biezace.kod == "firma":
+            _biezace = replace(_biezace, wydawca=podpis, autor=podpis)
     return _biezace
 
 
