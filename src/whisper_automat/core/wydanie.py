@@ -1,11 +1,15 @@
 """Wydania programu — jeden kod, dwie marki.
 
   * firma    — „Whisper Automat”: wersja firmowa, z modelem w instalatorze,
-               bez sprawdzania aktualizacji (firewall i tak by je blokował),
-               z nagrywaniem spotkań prosto w oknie.
+               aktualizacje z folderu firmowego (udział sieciowy; adres
+               tylko w paczce, tak jak podpis autora — patrz niżej).
   * papuga   — „Papuga – transkrypcje offline”: wersja publiczna z GitHuba,
                model pobierany przy pierwszym uruchomieniu, aktualizacje,
                link do wsparcia.
+
+Oba wydania nagrywają spotkania prosto w oknie (Papuga od 2026-10-09 —
+sprawdzone w firmie rozwiązania mają przechodzić do wydania publicznego
+i z powrotem; pole `nagrywanie` zostaje jako przełącznik).
 
 Wydania różnią się nazwą, plikiem .exe, identyfikatorem instalatora
 i katalogiem danych, więc oba programy mogą stać obok siebie na jednym
@@ -21,7 +25,10 @@ tylko w lokalnym pliku `tools/podpis_firmy.local.txt` — poza repozytorium —
 i trafia wyłącznie do paczki firmowej, nie do kodu wkładanego w Papugę.
 Uruchomione z kodu wydanie firmowe bierze ten podpis ze zmiennej
 WHISPER_AUTOMAT_PODPIS_FIRMY (ustawia ją np. tools/zrzut_okna.py), a bez
-niej podpisuje się samym MATCODE.
+niej podpisuje się samym MATCODE. Tak samo folder z aktualizacjami:
+w paczce z tools/aktualizacje_firmy.local.txt, z kodu ze zmiennej
+WHISPER_AUTOMAT_AKTUALIZACJE, a bez niej wydanie firmowe aktualizacji
+nie sprawdza.
 """
 
 from __future__ import annotations
@@ -48,8 +55,16 @@ class Wydanie:
     #: AppId instalatora Inno Setup. To on decyduje, czy Windows uznaje
     #: instalację za tę samą aplikację — dlatego każde wydanie ma własny.
     inno_id: str
-    #: Repozytorium z wydaniami („właściciel/nazwa”). Puste = bez aktualizacji.
+    #: Repozytorium z wydaniami („właściciel/nazwa”) — źródło aktualizacji
+    #: Papugi (API GitHuba). Puste = nie z GitHuba.
     repo: str = ""
+    #: Folder z wydaniami dla sieci firmowej — źródło aktualizacji Whisper
+    #: Automat: ścieżka UNC (\\serwer\udział\…) albo adres http(s). Leżą
+    #: w nim `najnowsza.json`, instalator i jego `.podpis`
+    #: (tools/publikuj_wydanie.py --wydanie firma). Z folderu program
+    #: instaluje wyłącznie wydania podpisane kluczem autora. Puste = nie
+    #: z folderu. Bez `repo` i bez folderu wydanie aktualizacji nie sprawdza.
+    aktualizacje_folder: str = ""
     #: Strona wsparcia autora (np. buycoffee.to). Pusta = brak przycisku.
     wsparcie_url: str = ""
     #: Adres do kontaktu. Pusty = brak w oknie „O programie”.
@@ -94,8 +109,12 @@ class Wydanie:
 
     @property
     def aktualizacje(self) -> bool:
-        return bool(self.repo)
+        return bool(self.repo or self.aktualizacje_folder)
 
+
+#: Klucz publiczny Ed25519 autora (MATCODE) — jeden dla obu wydań.
+#: Prywatny: %USERPROFILE%\.matcode\papuga-klucz-wydan.txt (tools/klucz_wydan.py).
+KLUCZ_WYDAN = "5889fe93bba0dc4ee0df9a4be7c5f3ad908cce307f7d664f0046773f335656b4"
 
 WYDANIA = {
     "firma": Wydanie(
@@ -106,7 +125,9 @@ WYDANIA = {
         # Ten sam, którego używały wersje 1.0.x — aktualizacja wersji
         # firmowej ma dalej nadpisywać istniejącą instalację.
         inno_id="{7C2F1A64-5D3B-4E82-9A17-6B0E4C9D2F31}",
-        # Pełny podpis (wydawca i autor) dokłada build_exe.py — patrz opis modułu.
+        # Pełny podpis (wydawca i autor) i folder aktualizacji dokłada
+        # build_exe.py — patrz opis modułu.
+        klucz_publiczny=KLUCZ_WYDAN,
         haslo="transkrypcje i nagrania spotkań",
         opis=("Nagrywa spotkania i zamienia nagrania w tekst, rozpoznając, "
               "kto mówi. Działa na komputerze, bez internetu."),
@@ -122,10 +143,11 @@ WYDANIA = {
         # Skrzynka kontaktowa do uzupełnienia, gdy powstanie.
         wsparcie_url="https://buycoffee.to/matcode",
         kontakt_email="",
-        klucz_publiczny="5889fe93bba0dc4ee0df9a4be7c5f3ad908cce307f7d664f0046773f335656b4",
+        klucz_publiczny=KLUCZ_WYDAN,
         haslo="transkrypcje offline",
-        opis=("Zamienia nagrania w tekst i rozpoznaje, kto mówi. "
-              "Działa na Twoim komputerze, bez internetu i bez chmury."),
+        opis=("Nagrywa spotkania, zamienia nagrania w tekst i rozpoznaje, "
+              "kto mówi. Działa na Twoim komputerze, bez internetu i bez chmury."),
+        nagrywanie=True,
     ),
 }
 
@@ -163,6 +185,9 @@ def biezace() -> Wydanie:
         podpis = os.environ.get("WHISPER_AUTOMAT_PODPIS_FIRMY", "").strip()
         if podpis and _biezace.kod == "firma":
             _biezace = replace(_biezace, wydawca=podpis, autor=podpis)
+        folder = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
+        if folder and _biezace.kod == "firma":
+            _biezace = replace(_biezace, aktualizacje_folder=folder)
     return _biezace
 
 

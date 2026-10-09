@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from ..teksty import t
 from .probe import find_ffmpeg
 
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -57,19 +58,19 @@ def is_media_file(path) -> bool:
 def _ffmpeg_bin() -> str:
     ffmpeg, _ = find_ffmpeg()
     if not ffmpeg:
-        raise MediaError(
+        raise MediaError(t(
             "Nie znaleziono ffmpeg w systemie. Uruchom setup.bat albo zainstaluj "
             "ffmpeg ręcznie (winget install Gyan.FFmpeg)."
-        )
+        ))
     return ffmpeg
 
 
 def _ffprobe_bin() -> str:
     _, ffprobe = find_ffmpeg()
     if not ffprobe:
-        raise MediaError(
+        raise MediaError(t(
             "Nie znaleziono ffprobe (składnik ffmpeg). Uruchom setup.bat."
-        )
+        ))
     return ffprobe
 
 
@@ -77,7 +78,7 @@ def probe_media(path) -> MediaInfo:
     """Odczytuje długość i strumienie pliku przy pomocy ffprobe."""
     p = Path(path)
     if not p.is_file():
-        raise MediaError(f"Plik nie istnieje: {p}")
+        raise MediaError(t("Plik nie istnieje: {plik}").format(plik=p))
 
     cmd = [
         _ffprobe_bin(),
@@ -93,18 +94,23 @@ def probe_media(path) -> MediaInfo:
             creationflags=_NO_WINDOW,
         )
     except subprocess.TimeoutExpired as exc:
-        raise MediaError(f"ffprobe nie odpowiedział dla pliku {p.name}") from exc
+        raise MediaError(
+            t("ffprobe nie odpowiedział dla pliku {plik}").format(plik=p.name)
+        ) from exc
 
     if out.returncode != 0:
         raise MediaError(
-            f"ffprobe nie potrafi odczytać pliku {p.name}: "
-            f"{(out.stderr or '').strip()[:300]}"
+            t("ffprobe nie potrafi odczytać pliku {plik}: {blad}").format(
+                plik=p.name, blad=(out.stderr or "").strip()[:300]
+            )
         )
 
     try:
         data = json.loads(out.stdout)
     except json.JSONDecodeError as exc:
-        raise MediaError(f"Nieczytelna odpowiedź ffprobe dla {p.name}") from exc
+        raise MediaError(
+            t("Nieczytelna odpowiedź ffprobe dla {plik}").format(plik=p.name)
+        ) from exc
 
     info = MediaInfo(path=p, size_bytes=p.stat().st_size)
 
@@ -131,10 +137,10 @@ def probe_media(path) -> MediaInfo:
                 info.has_video = True
 
     if not info.has_audio:
-        raise MediaError(
-            f"Plik {p.name} nie zawiera ścieżki dźwiękowej — nie ma czego "
-            f"transkrybować."
-        )
+        raise MediaError(t(
+            "Plik {plik} nie zawiera ścieżki dźwiękowej — nie ma czego "
+            "transkrybować."
+        ).format(plik=p.name))
     return info
 
 
@@ -192,7 +198,7 @@ def extract_audio(
             for line in proc.stdout:
                 if cancel is not None and cancel():
                     proc.kill()
-                    raise MediaError("Ekstrakcja audio przerwana przez użytkownika.")
+                    raise MediaError(t("Ekstrakcja audio przerwana przez użytkownika."))
                 if on_progress and duration > 0:
                     match = _TIME_RE.search(line)
                     if match:
@@ -201,16 +207,20 @@ def extract_audio(
         proc.wait(timeout=30)
     except subprocess.TimeoutExpired:
         proc.kill()
-        raise MediaError("ffmpeg zawiesił się przy zamykaniu pliku.")
+        raise MediaError(t("ffmpeg zawiesił się przy zamykaniu pliku."))
 
     if proc.returncode != 0:
         stderr = (proc.stderr.read() if proc.stderr else "").strip()
         raise MediaError(
-            f"ffmpeg nie zdołał wyciągnąć audio z {src.name}: {stderr[:400]}"
+            t("ffmpeg nie zdołał wyciągnąć audio z {plik}: {blad}").format(
+                plik=src.name, blad=stderr[:400]
+            )
         )
 
     if not dst.is_file() or dst.stat().st_size == 0:
-        raise MediaError(f"ffmpeg wyprodukował pusty plik audio dla {src.name}")
+        raise MediaError(
+            t("ffmpeg wyprodukował pusty plik audio dla {plik}").format(plik=src.name)
+        )
 
     if on_progress:
         on_progress(1.0)

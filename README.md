@@ -1,7 +1,7 @@
 # Papuga – transkrypcje offline
 
-Zamienia nagrania w tekst i rozpoznaje, kto mówi. Działa na Twoim komputerze,
-bez internetu i bez chmury.
+Nagrywa spotkania, zamienia nagrania w tekst i rozpoznaje, kto mówi. Działa
+na Twoim komputerze, bez internetu i bez chmury.
 
 **[Strona programu](https://matmiccode.github.io/papuga/) ·
 [Pobierz najnowszą wersję](https://github.com/matmiccode/papuga/releases/latest) ·
@@ -10,11 +10,14 @@ bez internetu i bez chmury.
 ## Co robi
 
 - Przeciągasz nagrania audio lub wideo do okna, klikasz *Transkrybuj*, dostajesz tekst.
+- Nagrywa spotkania (Teams, Zoom, przeglądarka): jeden przycisk zbiera Twój mikrofon
+  i dźwięk rozmówców do jednego pliku FLAC, a po zatrzymaniu od razu go transkrybuje.
 - Rozpoznaje mowę modelem Whisper (`large-v3-turbo`) na Twoim komputerze. Z kartą
   NVIDIA kilkanaście razy szybciej niż czas nagrania, bez karty na procesorze.
 - Zapisuje TXT ze znacznikami czasu, czysty tekst, napisy SRT i VTT oraz JSON.
 - Rozpoznaje, kto co powiedział, i pozwala nadać mówcom imiona po odsłuchaniu próbek.
-- Kolejka wielu plików, kontekst z nazwiskami i skrótami, automatyczne aktualizacje.
+- Kolejka wielu plików i automatyczne aktualizacje.
+- Interfejs po polsku i po angielsku (według języka Windows, przełącznik PL/EN w oknie).
 
 ## Instalacja
 

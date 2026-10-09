@@ -12,36 +12,37 @@ import sys
 from pathlib import Path
 from typing import List
 
+from .teksty import t
+
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="whisper-automat",
-        description="Szybka transkrypcja audio i wideo silnikiem Whisper.",
+        description=t("Szybka transkrypcja audio i wideo silnikiem Whisper."),
     )
     p.add_argument(
         "files",
         nargs="*",
-        help="Pliki lub foldery do transkrypcji (bez nich otwiera się okno).",
+        help=t("Pliki lub foldery do transkrypcji (bez nich otwiera się okno)."),
     )
     p.add_argument(
         "--doctor",
         action="store_true",
-        help="Wypisz raport o środowisku i zakończ.",
+        help=t("Wypisz raport o środowisku i zakończ."),
     )
     p.add_argument(
         "--cli",
         action="store_true",
-        help="Przetwórz pliki w konsoli, bez otwierania okna.",
+        help=t("Przetwórz pliki w konsoli, bez otwierania okna."),
     )
-    p.add_argument("--model", default=None, help="Wymuś model, np. large-v3-turbo.")
-    p.add_argument("--language", default=None, help="Kod języka, np. pl. Pusty = auto.")
-    p.add_argument("--prompt", default=None, help="Kontekst dla modelu.")
+    p.add_argument("--model", default=None, help=t("Wymuś model, np. large-v3-turbo."))
+    p.add_argument("--language", default=None, help=t("Kod języka, np. pl. Pusty = auto."))
     p.add_argument(
         "--formats",
         default=None,
-        help="Formaty po przecinku: txt,txt_plain,srt,vtt,json",
+        help=t("Formaty po przecinku: txt,txt_plain,srt,vtt,json"),
     )
-    p.add_argument("--output", default=None, help="Folder na transkrypcje.")
+    p.add_argument("--output", default=None, help=t("Folder na transkrypcje."))
     return p
 
 
@@ -90,6 +91,13 @@ def main(argv: List[str] = None) -> int:
 
     enable_system_certificates()
 
+    # Język interfejsu także dla --doctor i --cli: ustawienie programu,
+    # a bez niego język Windows (zmienna WHISPER_AUTOMAT_JEZYK wygrywa).
+    from . import teksty
+    from .core.config import Settings
+
+    teksty.ustaw_z_ustawien(Settings.load().jezyk)
+
     if args.doctor:
         from .core.doctor import diagnose, format_diagnosis
 
@@ -99,7 +107,7 @@ def main(argv: List[str] = None) -> int:
         if _bez_konsoli() and not _przejmij_konsole():
             from .app import show_report_window
 
-            show_report_window("Diagnostyka środowiska", raport)
+            show_report_window(t("Diagnostyka środowiska"), raport)
             return 0 if diag.ready else 1
 
         print(raport)
@@ -122,7 +130,7 @@ def _run_cli(args) -> int:
 
     files = collect_media(args.files)
     if not files:
-        print("Nie podano żadnego pliku audio ani wideo.")
+        print(t("Nie podano żadnego pliku audio ani wideo."))
         return 2
 
     settings = Settings.load()
@@ -130,8 +138,6 @@ def _run_cli(args) -> int:
         settings.model = args.model
     if args.language is not None:
         settings.language = args.language
-    if args.prompt is not None:
-        settings.initial_prompt = args.prompt
     if args.formats:
         settings.formats = [f.strip() for f in args.formats.split(",") if f.strip()]
     if args.output:
@@ -146,9 +152,9 @@ def _run_cli(args) -> int:
     results = Runner(settings, callbacks).run(files)
 
     failed = [r for r in results if not r.ok]
-    print(f"\nGotowe: {len(results) - len(failed)} / {len(results)}")
+    print("\n" + t("Gotowe: {ok} / {n}").format(ok=len(results) - len(failed), n=len(results)))
     for job in failed:
-        print(f"  BŁĄD {job.source.name}: {job.error}")
+        print("  " + t("BŁĄD {plik}: {blad}").format(plik=job.source.name, blad=job.error))
     return 1 if failed else 0
 
 

@@ -128,7 +128,6 @@ class Settings:
     device: str = ""             # pusty = użyj rekomendacji
     compute_type: str = ""       # pusty = użyj rekomendacji
     language: str = "pl"
-    initial_prompt: str = ""
     formats: List[str] = field(default_factory=lambda: ["txt", "srt"])
     output_dir: str = ""         # pusty = obok pliku źródłowego
     output_next_to_source: bool = False
@@ -154,6 +153,8 @@ class Settings:
     nagranie_glosniki: str = ""
     #: Po zatrzymaniu nagrania od razu uruchom transkrypcję.
     nagranie_transkrybuj: bool = True
+    #: Język interfejsu: "pl", "en" albo pusty = język Windows (teksty.py).
+    jezyk: str = ""
 
     # -- trwałość ----------------------------------------------------------
 
@@ -190,6 +191,8 @@ class Settings:
         self.speakers = max(0, min(int(self.speakers or 0), 20))
         if self.language not in LANGUAGE_LABELS:
             self.language = "pl"
+        if self.jezyk not in ("", "pl", "en"):
+            self.jezyk = ""
 
     # -- rozstrzyganie ustawień --------------------------------------------
 

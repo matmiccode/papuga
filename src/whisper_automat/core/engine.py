@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from ..teksty import t
 from .media import format_duration
 
 #: Nazwy repozytoriów CTranslate2 dla modeli, które mają własny odpowiednik.
@@ -194,18 +195,17 @@ def resolve_compute_type(device: str, requested: str):
     if not supported or requested in supported:
         return requested, ""
 
-    gdzie = "Ta karta" if device == "cuda" else "Procesor"
+    gdzie = t("Ta karta") if device == "cuda" else t("Procesor")
     for candidate in _FALLBACK.get(requested, []):
         if candidate in supported:
-            return candidate, (
-                f"{gdzie} nie obsługuje precyzji {requested} — "
-                f"przechodzę na {candidate}."
-            )
+            return candidate, t(
+                "{gdzie} nie obsługuje precyzji {z} — przechodzę na {na}."
+            ).format(gdzie=gdzie, z=requested, na=candidate)
 
     fallback = sorted(supported)[0]
-    return fallback, (
-        f"{gdzie} nie obsługuje precyzji {requested} — przechodzę na {fallback}."
-    )
+    return fallback, t(
+        "{gdzie} nie obsługuje precyzji {z} — przechodzę na {na}."
+    ).format(gdzie=gdzie, z=requested, na=fallback)
 
 
 def modele_lokalne(models_dir: Optional[Path] = None) -> List[str]:
@@ -278,13 +278,13 @@ class Transcriber:
         log = log or (lambda _m: None)
 
         if not engine_available():
-            raise EngineError(
+            raise EngineError(t(
                 "Brak silnika transkrypcji. Uruchom setup.bat, żeby zainstalować "
                 "faster-whisper."
-            )
+            ))
 
         if device == "cuda" and not cuda_ready():
-            log("GPU niedostępne dla silnika — przechodzę na CPU.")
+            log(t("GPU niedostępne dla silnika — przechodzę na CPU."))
             device, compute_type = "cpu", "int8"
 
         prepare_cuda_libraries()
@@ -299,7 +299,9 @@ class Transcriber:
         self._model = None  # zwolnij VRAM przed załadowaniem nowego modelu
         self._key = None
 
-        log(f"Ładuję model {model} ({device}, {compute_type})…")
+        log(t("Ładuję model {model} ({urzadzenie}, {precyzja})…").format(
+            model=model, urzadzenie=device, precyzja=compute_type
+        ))
         start = time.time()
 
         try:
@@ -313,7 +315,9 @@ class Transcriber:
                 raise EngineError(_blad_ladowania(model, exc)) from exc
 
             if device == "cuda":
-                log(f"Nie udało się użyć GPU ({_short(exc)}). Próbuję na CPU…")
+                log(t("Nie udało się użyć GPU ({blad}). Próbuję na CPU…").format(
+                    blad=_short(exc)
+                ))
                 device, compute_type = "cpu", "int8"
                 compute_type, _note = resolve_compute_type(device, compute_type)
                 try:
@@ -324,7 +328,7 @@ class Transcriber:
                 raise EngineError(_blad_ladowania(model, exc)) from exc
 
         self._key = (model, device, compute_type)
-        log(f"Model gotowy w {time.time() - start:.1f} s.")
+        log(t("Model gotowy w {s:.1f} s.").format(s=time.time() - start))
         return ENGINE
 
     def _load_faster(self, model: str, device: str, compute_type: str):
@@ -399,7 +403,6 @@ class Transcriber:
         source_path: Optional[Path] = None,
         duration: float = 0.0,
         language: Optional[str] = "pl",
-        initial_prompt: str = "",
         beam_size: int = 5,
         vad_filter: bool = True,
         word_timestamps: bool = False,
@@ -408,7 +411,7 @@ class Transcriber:
         cancel: Optional[Callable[[], bool]] = None,
     ) -> TranscriptionResult:
         if self._model is None or self._key is None:
-            raise EngineError("Model nie został załadowany — wywołaj load().")
+            raise EngineError(t("Model nie został załadowany — wywołaj load()."))
 
         model_name, device, compute_type = self._key
         result = TranscriptionResult(
@@ -422,7 +425,7 @@ class Transcriber:
 
         start = time.time()
         self._run_faster(
-            result, audio_path, language, initial_prompt, beam_size,
+            result, audio_path, language, beam_size,
             vad_filter, word_timestamps, on_progress, on_segment, cancel,
         )
         result.elapsed = time.time() - start
@@ -434,13 +437,12 @@ class Transcriber:
         return result
 
     def _run_faster(
-        self, result, audio_path, language, initial_prompt, beam_size,
+        self, result, audio_path, language, beam_size,
         vad_filter, word_timestamps, on_progress, on_segment, cancel,
     ):
         segments, info = self._model.transcribe(
             str(audio_path),
             language=language or None,
-            initial_prompt=initial_prompt or None,
             beam_size=beam_size,
             vad_filter=vad_filter,
             word_timestamps=word_timestamps,
@@ -453,7 +455,7 @@ class Transcriber:
 
         for seg in segments:
             if cancel is not None and cancel():
-                raise Cancelled("Transkrypcja przerwana przez użytkownika.")
+                raise Cancelled(t("Transkrypcja przerwana przez użytkownika."))
             item = Segment(
                 start=float(seg.start),
                 end=float(seg.end),
@@ -479,8 +481,10 @@ def _blad_ladowania(model: str, exc: BaseException) -> str:
 
     wskazowka = opisz_blad_sieci(exc)
     if wskazowka:
-        return f"Nie udało się pobrać modelu {model}.\n\n{wskazowka}"
-    return f"Nie udało się załadować modelu {model}: {_short(exc)}"
+        return t("Nie udało się pobrać modelu {model}.").format(model=model) + "\n\n" + wskazowka
+    return t("Nie udało się załadować modelu {model}: {blad}").format(
+        model=model, blad=_short(exc)
+    )
 
 
 def _short(exc: Exception, limit: int = 200) -> str:
@@ -490,9 +494,12 @@ def _short(exc: Exception, limit: int = 200) -> str:
 
 def summarize(result: TranscriptionResult) -> str:
     """Jednolinijkowe podsumowanie do logu."""
-    return (
-        f"{len(result.segments)} segmentów, "
-        f"{format_duration(result.duration)} materiału w "
-        f"{format_duration(result.elapsed)} "
-        f"({result.speed_ratio:.1f}x realtime, {result.device})"
+    return t(
+        "{n} segmentów, {dlugosc} materiału w {czas} ({x:.1f}x realtime, {urzadzenie})"
+    ).format(
+        n=len(result.segments),
+        dlugosc=format_duration(result.duration),
+        czas=format_duration(result.elapsed),
+        x=result.speed_ratio,
+        urzadzenie=result.device,
     )

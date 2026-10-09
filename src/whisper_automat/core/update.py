@@ -1,7 +1,12 @@
-"""Nowe wersje programu z wydań (Releases) na GitHubie.
+"""Nowe wersje programu: z wydań (Releases) na GitHubie albo z folderu firmowego.
 
-Tylko dla wydań, które mają repozytorium (`wydanie.repo`) — wersja firmowa
-nigdy tu nie zagląda.
+Źródło wybiera wydanie: Papuga ma repozytorium (`wydanie.repo`) i pyta
+API GitHuba; Whisper Automat ma folder (`wydanie.aktualizacje_folder` —
+udział sieciowy w firmie albo adres http) i czyta z niego `najnowsza.json`.
+Wydanie bez jednego i drugiego nigdy tu nie zagląda. Mechanizm dalej jest
+jeden: ten sam pasek w oknie, to samo sprawdzenie podpisu Ed25519, ten
+sam cichy instalator. Z GitHuba do firmy nie trafia nic — adresy, klucz
+i nazwy biorą się z `Wydanie`, nie z kodu.
 
 Przebieg:
   1. `sprawdz()` pyta API GitHuba o najnowsze wydanie (bez logowania; limit
@@ -22,6 +27,14 @@ Bez klucza suma pochodzi z `digest` albo z pliku `<instalator>.sha256`.
 Instalator pobierany jest tylko z adresu strony wydań własnego repozytorium
 (albo magazynu plików GitHuba, do którego ta strona przekierowuje) — adres
 z odpowiedzi API, który prowadzi gdzie indziej, jest odrzucany.
+
+Folder firmowy: `najnowsza.json` ({"wersja", "instalator", "rozmiar",
+"opis"}) obok instalatora i pliku `<instalator>.podpis` (pisze je
+tools/publikuj_wydanie.py --wydanie firma). Udział sieciowy bywa
+zapisywalny dla wielu osób, więc z folderu program instaluje WYŁĄCZNIE
+wydania podpisane kluczem autora — bez furtki `.sha256`. Niedostępny
+folder (laptop poza firmą) to zwykły błąd sprawdzania: ręczne go pokaże,
+automatyczne zapisze w dzienniku.
 """
 
 from __future__ import annotations
@@ -38,12 +51,16 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from ..teksty import t
 from . import podpis as podpisy
-from .download import DownloadError, Plik, Postep, pobierz_plik
+from .download import DownloadError, Plik, Postep, kopiuj_plik, pobierz_plik
 from .network import enable_system_certificates, opisz_blad_sieci
 from .wydanie import Wydanie, biezace
 
 API = "https://api.github.com"
+
+#: Opis najnowszego wydania w folderze firmowym.
+MANIFEST = "najnowsza.json"
 
 #: Jak często sprawdzać przy starcie. Doba to dość, żeby nowa wersja
 #: dotarła szybko, i dość rzadko, żeby nikt nie poczuł, że program „dzwoni”.
@@ -176,16 +193,16 @@ def _suma_podpisana(instalator: dict, zalaczniki: List[dict], wydanie: Wydanie) 
     nazwa = str(instalator.get("name") or "")
     url = _zalacznik(zalaczniki, nazwa + ".podpis", wydanie)
     if not url:
-        raise podpisy.BladPodpisu(
+        raise podpisy.BladPodpisu(t(
             "Wydanie nie ma pliku podpisu (.podpis), więc program nie zainstaluje go sam."
-        )
+        ))
     tekst = _get(url, "application/octet-stream").decode("utf-8", "replace")
     suma = podpisy.zweryfikuj_wydanie(tekst, wydanie.klucz_publiczny, nazwa)
     digest = _digest(instalator)
     if digest and digest != suma:
-        raise podpisy.BladPodpisu(
+        raise podpisy.BladPodpisu(t(
             "Suma instalatora policzona przez GitHub różni się od podpisanej przez autora."
-        )
+        ))
     return suma
 
 
@@ -197,9 +214,15 @@ def sprawdz(obecna: str, wydanie: Optional[Wydanie] = None) -> Optional[Aktualiz
     w tle przy starcie).
     """
     wydanie = wydanie or biezace()
-    if not wydanie.repo:
-        return None
+    if wydanie.repo:
+        return _sprawdz_github(obecna, wydanie)
+    if wydanie.aktualizacje_folder:
+        return _sprawdz_folder(obecna, wydanie)
+    return None
 
+
+def _sprawdz_github(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
+    """Najnowsze wydanie z API GitHuba (Papuga)."""
     enable_system_certificates()
     try:
         dane = json.loads(_get(f"{API}/repos/{wydanie.repo}/releases/latest"))
@@ -208,10 +231,12 @@ def sprawdz(obecna: str, wydanie: Optional[Wydanie] = None) -> Optional[Aktualiz
             # Repozytorium bez żadnego wydania (albo jeszcze nie istnieje).
             return None
         if exc.code == 403:
-            raise UpdateError(
+            raise UpdateError(t(
                 "GitHub chwilowo ograniczył liczbę zapytań. Spróbuj za godzinę."
-            ) from exc
-        raise UpdateError(f"GitHub odpowiedział błędem HTTP {exc.code}.") from exc
+            )) from exc
+        raise UpdateError(
+            t("GitHub odpowiedział błędem HTTP {kod}.").format(kod=exc.code)
+        ) from exc
     except Exception as exc:
         raise UpdateError(
             opisz_blad_sieci(exc) or f"{type(exc).__name__}: {exc}"
@@ -233,7 +258,7 @@ def sprawdz(obecna: str, wydanie: Optional[Wydanie] = None) -> Optional[Aktualiz
     zalaczniki = dane.get("assets") or []
     instalator = _wybierz_instalator(zalaczniki, wydanie)
     if not instalator:
-        akt.uwaga = "Wydanie nie zawiera instalatora."
+        akt.uwaga = t("Wydanie nie zawiera instalatora.")
         return akt
 
     suma = ""
@@ -244,19 +269,127 @@ def sprawdz(obecna: str, wydanie: Optional[Wydanie] = None) -> Optional[Aktualiz
         else:
             suma = _suma(instalator, zalaczniki, wydanie)
             if not suma:
-                akt.uwaga = "Wydanie nie ma sumy kontrolnej instalatora."
+                akt.uwaga = t("Wydanie nie ma sumy kontrolnej instalatora.")
     except Exception as exc:
         suma, akt.podpisana = "", False
         akt.uwaga = str(exc) or type(exc).__name__
 
     akt.url = str(instalator.get("browser_download_url") or "")
     if not adres_z_wydan(akt.url, wydanie):
-        akt.uwaga = "Adres instalatora nie prowadzi do strony wydań tego programu."
+        akt.uwaga = t("Adres instalatora nie prowadzi do strony wydań tego programu.")
         akt.url = ""
     akt.instalator = Plik(
         nazwa=str(instalator.get("name") or ""),
         rozmiar=int(instalator.get("size") or 0),
         sha256=suma,
+    )
+    return akt
+
+
+def _jest_url(sciezka: str) -> bool:
+    return sciezka.lower().startswith(("http://", "https://"))
+
+
+def _w_folderze(folder: str, nazwa: str) -> str:
+    """Adres pliku w folderze wydań — URL albo ścieżka (także UNC)."""
+    if _jest_url(folder):
+        return folder.rstrip("/") + "/" + nazwa
+    return str(Path(folder) / nazwa)
+
+
+def _czytaj_z_folderu(folder: str, nazwa: str) -> bytes:
+    """Treść małego pliku z folderu wydań. FileNotFoundError, gdy go nie ma."""
+    if _jest_url(folder):
+        try:
+            return _get(_w_folderze(folder, nazwa), "application/octet-stream")
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise FileNotFoundError(nazwa) from exc
+            raise
+    return Path(_w_folderze(folder, nazwa)).read_bytes()
+
+
+def _nazwa_instalatora_ok(nazwa: str, wydanie: Wydanie) -> bool:
+    """`<Plik>-<wersja>-Setup(-cpu)(-offline).exe`, bez ścieżki.
+
+    Z folderu firmowego idzie ten wariant, który tam leży (zwykle offline,
+    z modelem w środku) — inaczej niż z GitHuba, gdzie liczy się tylko lekki.
+    """
+    return bool(re.fullmatch(
+        rf"{re.escape(wydanie.plik)}-[\d.]+-Setup(-cpu)?(-offline)?\.exe",
+        nazwa, re.IGNORECASE,
+    ))
+
+
+def _sprawdz_folder(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
+    """Najnowsze wydanie z folderu firmowego (`najnowsza.json`).
+
+    Folder niedostępny (laptop poza siecią firmową) to UpdateError — ręczne
+    sprawdzenie powie o tym wprost, automatyczne zapisze w dzienniku. Folder
+    pusty (nic jeszcze nie opublikowano) to po prostu brak nowej wersji.
+    """
+    folder = wydanie.aktualizacje_folder
+    if _jest_url(folder):
+        enable_system_certificates()
+    elif not Path(folder).is_dir():
+        # Windows zgłasza niedostępny udział tak samo jak brak pliku, więc
+        # sprawdzamy sam folder, zanim spytamy o plik.
+        raise UpdateError(t(
+            "Folder z aktualizacjami jest niedostępny (poza siecią firmową?):\n{folder}"
+        ).format(folder=folder))
+    try:
+        dane = json.loads(_czytaj_z_folderu(folder, MANIFEST).decode("utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        raise UpdateError(
+            t("Nie udało się odczytać {plik} z folderu aktualizacji.").format(plik=MANIFEST)
+            + f"\n{type(exc).__name__}: {exc}"
+        ) from exc
+    except Exception as exc:
+        raise UpdateError(opisz_blad_sieci(exc) or f"{type(exc).__name__}: {exc}") from exc
+    if not isinstance(dane, dict):
+        raise UpdateError(
+            t("Plik {plik} w folderze aktualizacji ma zły format.").format(plik=MANIFEST)
+        )
+
+    wersja = str(dane.get("wersja", "")).lstrip("vV")
+    if not wersja or not nowsza(wersja, obecna):
+        return None
+    akt = Aktualizacja(
+        wersja=wersja,
+        opis=str(dane.get("opis") or "").strip(),
+        strona=folder,
+    )
+
+    nazwa = str(dane.get("instalator") or "")
+    if not _nazwa_instalatora_ok(nazwa, wydanie):
+        akt.uwaga = t("Wpis o wydaniu nie wskazuje instalatora tego programu.")
+        return akt
+
+    # Udział sieciowy bywa zapisywalny dla wielu osób, więc tu nie ma drogi
+    # „sama suma wystarczy” — tylko podpis kluczem autora.
+    suma = ""
+    try:
+        if not wydanie.klucz_publiczny:
+            raise podpisy.BladPodpisu(t(
+                "Program nie ma klucza do sprawdzania podpisów wydań."
+            ))
+        try:
+            tekst = _czytaj_z_folderu(folder, nazwa + ".podpis").decode("utf-8", "replace")
+        except FileNotFoundError:
+            raise podpisy.BladPodpisu(t(
+                "Wydanie nie ma pliku podpisu (.podpis), więc program nie zainstaluje go sam."
+            )) from None
+        suma = podpisy.zweryfikuj_wydanie(tekst, wydanie.klucz_publiczny, nazwa)
+        akt.podpisana = True
+    except Exception as exc:
+        suma, akt.podpisana = "", False
+        akt.uwaga = str(exc) or type(exc).__name__
+
+    akt.url = _w_folderze(folder, nazwa)
+    akt.instalator = Plik(
+        nazwa=nazwa, rozmiar=int(dane.get("rozmiar") or 0), sha256=suma,
     )
     return akt
 
@@ -284,13 +417,19 @@ def pobierz(
 ) -> Path:
     if not mozna_zainstalowac(akt):
         raise DownloadError(
-            (akt.uwaga or "To wydanie nie ma instalatora ze sprawdzalną sumą kontrolną.")
-            + " Program nie zainstaluje go sam — pobierz je ze strony wydania."
+            (akt.uwaga or t("To wydanie nie ma instalatora ze sprawdzalną sumą kontrolną."))
+            + " " + t("Program nie zainstaluje go sam — pobierz je ze strony wydania.")
         )
-    return pobierz_plik(
-        akt.url, katalog_pobran(), akt.instalator,
-        on_progress=on_progress, log=log, cancel=cancel,
-        co=f"wersji {akt.wersja}",
+    co = t("wersji {wersja}").format(wersja=akt.wersja)
+    if _jest_url(akt.url):
+        return pobierz_plik(
+            akt.url, katalog_pobran(), akt.instalator,
+            on_progress=on_progress, log=log, cancel=cancel, co=co,
+        )
+    # Folder firmowy: zwykła kopia z udziału, z tym samym sprawdzeniem sumy.
+    return kopiuj_plik(
+        Path(akt.url), katalog_pobran(), akt.instalator,
+        on_progress=on_progress, log=log, cancel=cancel, co=co,
     )
 
 

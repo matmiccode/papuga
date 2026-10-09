@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from ..teksty import jezyk, t
 from .engine import Cancelled
 from .network import enable_system_certificates, opisz_blad_sieci
 from .wydanie import biezace
@@ -113,14 +114,19 @@ def repozytorium(model: str) -> str:
     try:
         return REPOZYTORIA[model]
     except KeyError:
-        raise DownloadError(f"Nieznany model: {model}") from None
+        raise DownloadError(t("Nieznany model: {model}").format(model=model)) from None
+
+
+def _ulamek(tekst: str) -> str:
+    """Przecinek dziesiętny po polsku („1,6 GB”), kropka po angielsku („1.6 GB”)."""
+    return tekst if jezyk() == "en" else tekst.replace(".", ",")
 
 
 def rozmiar_opis(model: str) -> str:
     """„1,6 GB” / „485 MB” — do komunikatów przed pobraniem."""
     mb = ROZMIARY_MB.get(model, 0)
     if mb >= 1000:
-        return f"{mb / 1000:.1f} GB".replace(".", ",")
+        return _ulamek(f"{mb / 1000:.1f} GB")
     return f"{mb} MB"
 
 
@@ -130,14 +136,16 @@ def opis_postepu(co: str, pobrane: int, wszystkie: int, predkosc: float) -> str:
     `co` to dopełnienie: „model large-v3-turbo”, „wersję 1.2.0”.
     """
     mb = 1024 ** 2
-    tekst = f"Pobieram {co} — {pobrane / mb:.0f} z {wszystkie / mb:.0f} MB"
+    tekst = t("Pobieram {co} — {pobrane:.0f} z {wszystkie:.0f} MB").format(
+        co=co, pobrane=pobrane / mb, wszystkie=wszystkie / mb
+    )
     if predkosc > 0:
-        tekst += f" · {predkosc / mb:.1f} MB/s".replace(".", ",")
+        tekst += " · " + _ulamek(f"{predkosc / mb:.1f} MB/s")
         zostalo = (wszystkie - pobrane) / predkosc
         if zostalo >= 90:
-            tekst += f" · zostało ok. {round(zostalo / 60)} min"
+            tekst += " · " + t("zostało ok. {n} min").format(n=round(zostalo / 60))
         elif zostalo > 0:
-            tekst += f" · zostało ok. {max(5, round(zostalo / 5) * 5)} s"
+            tekst += " · " + t("zostało ok. {n} s").format(n=max(5, round(zostalo / 5) * 5))
     return tekst
 
 
@@ -184,10 +192,10 @@ def lista_plikow(model: str) -> List[Plik]:
         ))
 
     if not any(p.nazwa == "model.bin" for p in pliki):
-        raise DownloadError(
-            f"Repozytorium {repo} nie zawiera pliku model.bin — "
-            f"serwer zwrócił nieoczekiwaną odpowiedź."
-        )
+        raise DownloadError(t(
+            "Repozytorium {repo} nie zawiera pliku model.bin — "
+            "serwer zwrócił nieoczekiwaną odpowiedź."
+        ).format(repo=repo))
     return pliki
 
 
@@ -247,16 +255,20 @@ def pobierz_model(
     brakuje = wszystkie - juz_jest
     # Zapas na pliki tymczasowe audio, które powstają przy transkrypcji.
     if wolne < brakuje + 512 * 1024 ** 2:
-        raise DownloadError(
-            f"Za mało miejsca na dysku: model potrzebuje "
-            f"{brakuje / 1024 ** 3:.1f} GB, wolne jest {wolne / 1024 ** 3:.1f} GB "
-            f"({models_dir.anchor})."
-        )
+        raise DownloadError(t(
+            "Za mało miejsca na dysku: model potrzebuje "
+            "{brakuje:.1f} GB, wolne jest {wolne:.1f} GB "
+            "({dysk})."
+        ).format(brakuje=brakuje / 1024 ** 3, wolne=wolne / 1024 ** 3, dysk=models_dir.anchor))
 
     log(
-        f"Pobieram model {model} ({wszystkie / 1024 ** 3:.2f} GB) "
-        f"z {HUB.split('://')[-1]}…"
-        + (f" Wznawiam — {juz_jest / 1024 ** 2:.0f} MB było już na dysku." if juz_jest >= 1024 ** 2 else "")
+        t("Pobieram model {model} ({gb:.2f} GB) z {serwer}…").format(
+            model=model, gb=wszystkie / 1024 ** 3, serwer=HUB.split("://")[-1]
+        )
+        + (
+            " " + t("Wznawiam — {mb:.0f} MB było już na dysku.").format(mb=juz_jest / 1024 ** 2)
+            if juz_jest >= 1024 ** 2 else ""
+        )
     )
 
     licznik = _Licznik(wszystkie, juz_jest, on_progress)
@@ -265,16 +277,16 @@ def pobierz_model(
         _pobierz_plik(url, plik, tymczasowy, licznik, cancel, log,
                       lambda exc: _opis_bledu(model, exc))
 
-    log("Sprawdzam sumy kontrolne…")
+    log(t("Sprawdzam sumy kontrolne…"))
     for plik in pliki:
         if cancel():
-            raise Cancelled("Pobieranie przerwane przez użytkownika.")
+            raise Cancelled(t("Pobieranie przerwane przez użytkownika."))
         if not zgodny(tymczasowy / plik.nazwa, plik):
             (tymczasowy / plik.nazwa).unlink(missing_ok=True)
-            raise DownloadError(
-                f"Plik {plik.nazwa} różni się od oryginału (niezgodna suma "
-                f"kontrolna). Został usunięty — spróbuj pobrać ponownie."
-            )
+            raise DownloadError(t(
+                "Plik {plik} różni się od oryginału (niezgodna suma "
+                "kontrolna). Został usunięty — spróbuj pobrać ponownie."
+            ).format(plik=plik.nazwa))
 
     # Komplet sprawdzony — dopiero teraz staje się modelem widocznym dla
     # silnika. Przeniesienie w obrębie jednego dysku jest natychmiastowe.
@@ -285,7 +297,9 @@ def pobierz_model(
         tymczasowy.parent.rmdir()
     except OSError:
         pass
-    log(f"Model {model} gotowy — kolejne uruchomienia nie potrzebują internetu.")
+    log(t("Model {model} gotowy — kolejne uruchomienia nie potrzebują internetu.").format(
+        model=model
+    ))
     return cel
 
 
@@ -330,15 +344,17 @@ def pobierz_plik(
     on_progress: Optional[Postep] = None,
     log: Optional[Callable[[str], None]] = None,
     cancel: Optional[Callable[[], bool]] = None,
-    co: str = "pliku",
+    co: str = "",
 ) -> Path:
     """Pobiera jeden plik do `katalog`, ze wznawianiem i sprawdzeniem sumy.
 
     Tego samego mechanizmu co model używa aktualizacja programu — przerwane
     pobieranie instalatora też rusza od miejsca, w którym stanęło.
+    `co` to dopełnienie do komunikatów („wersji 1.2.0”); puste = „pliku”.
     """
     log = log or (lambda _m: None)
     cancel = cancel or (lambda: False)
+    co = co or t("pliku")
     katalog = Path(katalog)
     katalog.mkdir(parents=True, exist_ok=True)
     enable_system_certificates()
@@ -347,17 +363,71 @@ def pobierz_plik(
 
     def opis(exc: BaseException) -> str:
         wskazowka = opisz_blad_sieci(exc) or f"{type(exc).__name__}: {exc}"
-        return f"Nie udało się pobrać {co}.\n\n{wskazowka}"
+        return t("Nie udało się pobrać {co}.").format(co=co) + "\n\n" + wskazowka
 
     _pobierz_plik(url, plik, katalog, licznik, cancel, log, opis)
     sciezka = katalog / plik.nazwa
     if not zgodny(sciezka, plik):
         sciezka.unlink(missing_ok=True)
-        raise DownloadError(
-            f"Pobrany plik {plik.nazwa} różni się od oryginału (niezgodna suma "
-            f"kontrolna). Został usunięty — spróbuj ponownie."
-        )
+        raise DownloadError(t(
+            "Pobrany plik {plik} różni się od oryginału (niezgodna suma "
+            "kontrolna). Został usunięty — spróbuj ponownie."
+        ).format(plik=plik.nazwa))
     return sciezka
+
+
+def kopiuj_plik(
+    zrodlo: Path,
+    katalog: Path,
+    plik: Plik,
+    on_progress: Optional[Postep] = None,
+    log: Optional[Callable[[str], None]] = None,
+    cancel: Optional[Callable[[], bool]] = None,
+    co: str = "",
+) -> Path:
+    """Kopiuje plik z dysku albo udziału sieciowego do `katalog`, z postępem
+    i sprawdzeniem sumy — odpowiednik `pobierz_plik` dla folderu firmowego
+    z aktualizacjami (core/update.py). Kopia idzie do `<nazwa>.part`,
+    nazwę docelową dostaje dopiero cała i zgodna z sumą.
+    """
+    cancel = cancel or (lambda: False)
+    co = co or t("pliku")
+    zrodlo, katalog = Path(zrodlo), Path(katalog)
+    katalog.mkdir(parents=True, exist_ok=True)
+    gotowy = katalog / plik.nazwa
+    if gotowy.is_file() and zgodny(gotowy, plik):
+        return gotowy
+    czesc = katalog / (plik.nazwa + ".part")
+    try:
+        rozmiar = plik.rozmiar or zrodlo.stat().st_size
+        licznik = _Licznik(rozmiar, 0, on_progress)
+        with open(zrodlo, "rb") as we, open(czesc, "wb") as wy:
+            while True:
+                if cancel():
+                    raise Cancelled(t("Pobieranie przerwane przez użytkownika."))
+                porcja = we.read(PORCJA * 8)
+                if not porcja:
+                    break
+                wy.write(porcja)
+                licznik.dodaj(len(porcja))
+        licznik.dodaj(0, wymus=True)
+    except Cancelled:
+        czesc.unlink(missing_ok=True)
+        raise
+    except OSError as exc:
+        czesc.unlink(missing_ok=True)
+        raise DownloadError(
+            t("Nie udało się skopiować {co} z {folder}.").format(co=co, folder=zrodlo.parent)
+            + f"\n\n{type(exc).__name__}: {exc}"
+        ) from exc
+    os.replace(czesc, gotowy)
+    if not zgodny(gotowy, plik):
+        gotowy.unlink(missing_ok=True)
+        raise DownloadError(t(
+            "Skopiowany plik {plik} różni się od oryginału (niezgodna suma "
+            "kontrolna). Został usunięty — spróbuj ponownie."
+        ).format(plik=plik.nazwa))
+    return gotowy
 
 
 def _pobierz_plik(url, plik: Plik, katalog: Path, licznik: _Licznik, cancel, log,
@@ -369,7 +439,7 @@ def _pobierz_plik(url, plik: Plik, katalog: Path, licznik: _Licznik, cancel, log
 
     for proba in range(1, PROBY + 1):
         if cancel():
-            raise Cancelled("Pobieranie przerwane przez użytkownika.")
+            raise Cancelled(t("Pobieranie przerwane przez użytkownika."))
         mam = czesc.stat().st_size if czesc.is_file() else 0
         try:
             _pobierz_od(url, czesc, mam, plik, licznik, cancel)
@@ -385,8 +455,9 @@ def _pobierz_plik(url, plik: Plik, katalog: Path, licznik: _Licznik, cancel, log
                 czesc.unlink(missing_ok=True)
             if proba == PROBY or _trwaly(exc):
                 raise DownloadError(opis_bledu(exc)) from exc
-            log(f"Połączenie przerwane ({type(exc).__name__}) — wznawiam "
-                f"{plik.nazwa}, próba {proba + 1} z {PROBY}…")
+            log(t(
+                "Połączenie przerwane ({blad}) — wznawiam {plik}, próba {proba} z {prob}…"
+            ).format(blad=type(exc).__name__, plik=plik.nazwa, proba=proba + 1, prob=PROBY))
             time.sleep(min(2 * proba, 10))
 
     os.replace(czesc, gotowy)
@@ -406,7 +477,7 @@ def _pobierz_od(url, czesc: Path, mam: int, plik: Plik, licznik: _Licznik, cance
         with open(czesc, "ab" if mam else "wb") as f:
             while True:
                 if cancel():
-                    raise Cancelled("Pobieranie przerwane przez użytkownika.")
+                    raise Cancelled(t("Pobieranie przerwane przez użytkownika."))
                 porcja = odp.read(PORCJA)
                 if not porcja:
                     break
@@ -415,13 +486,13 @@ def _pobierz_od(url, czesc: Path, mam: int, plik: Plik, licznik: _Licznik, cance
 
     if plik.rozmiar and czesc.stat().st_size < plik.rozmiar:
         # Serwer zamknął połączenie przed końcem — to przypadek do wznowienia.
-        raise ConnectionError("połączenie zakończone przed końcem pliku")
+        raise ConnectionError(t("połączenie zakończone przed końcem pliku"))
     if plik.rozmiar and czesc.stat().st_size > plik.rozmiar:
         czesc.unlink(missing_ok=True)
-        raise DownloadError(
-            f"Serwer przysłał więcej danych niż zapowiadał ({plik.nazwa}). "
-            f"Spróbuj ponownie za chwilę."
-        )
+        raise DownloadError(t(
+            "Serwer przysłał więcej danych niż zapowiadał ({plik}). "
+            "Spróbuj ponownie za chwilę."
+        ).format(plik=plik.nazwa))
 
 
 def _trwaly(exc: BaseException) -> bool:
@@ -435,12 +506,12 @@ def _trwaly(exc: BaseException) -> bool:
 def _opis_bledu(model: str, exc: BaseException) -> str:
     wskazowka = opisz_blad_sieci(exc)
     if isinstance(exc, urllib.error.HTTPError) and exc.code in (403, 407, 451):
-        wskazowka = wskazowka or (
-            f"Serwer odmówił dostępu (HTTP {exc.code}). Zwykle znaczy to, że "
-            f"huggingface.co blokuje firewall albo filtr treści w sieci. "
-            f"W takiej sieci użyj wersji instalatora z modelem w środku "
-            f"(„offline”)."
-        )
+        wskazowka = wskazowka or t(
+            "Serwer odmówił dostępu (HTTP {kod}). Zwykle znaczy to, że "
+            "huggingface.co blokuje firewall albo filtr treści w sieci. "
+            "W takiej sieci użyj wersji instalatora z modelem w środku "
+            "(„offline”)."
+        ).format(kod=exc.code)
     if not wskazowka:
         wskazowka = f"{type(exc).__name__}: {exc}"
-    return f"Nie udało się pobrać modelu {model}.\n\n{wskazowka}"
+    return t("Nie udało się pobrać modelu {model}.").format(model=model) + "\n\n" + wskazowka

@@ -36,6 +36,7 @@ from tkinter import ttk
 from typing import Dict, List, Tuple
 
 from .core.config import APP_NAME
+from .teksty import t
 
 from . import theme
 from .theme import BG, FG, FG_DIM
@@ -121,10 +122,10 @@ def _zagraj_mci(plik: Path) -> None:
     wyslij = ctypes.windll.winmm.mciSendStringW
     wyslij(f"close {_MCI_ALIAS}", None, 0, 0)
     if wyslij(f'open "{plik}" type waveaudio alias {_MCI_ALIAS}', None, 0, 0):
-        raise RuntimeError("MCI nie otworzyło pliku próbki")
+        raise RuntimeError(t("MCI nie otworzyło pliku próbki"))
     if wyslij(f"play {_MCI_ALIAS} from 0", None, 0, 0):
         wyslij(f"close {_MCI_ALIAS}", None, 0, 0)
-        raise RuntimeError("MCI nie rozpoczęło odtwarzania")
+        raise RuntimeError(t("MCI nie rozpoczęło odtwarzania"))
 
 
 def _cisza() -> None:
@@ -155,7 +156,7 @@ class SpeakerDialog:
         self._tymczasowe: List[Path] = []
 
         self.win = tk.Toplevel(parent)
-        self.win.title("Kto jest kim?")
+        self.win.title(t("Kto jest kim?"))
         self.win.configure(bg=BG)
         self.win.resizable(False, False)
         self.win.transient(parent)
@@ -176,26 +177,26 @@ class SpeakerDialog:
 
         ttk.Label(
             ramka,
-            text=f"{self.result.source.name} — rozpoznane głosy: "
-                 f"{len(self._probki)}",
+            text=t("{plik} — rozpoznane głosy: {n}").format(
+                plik=self.result.source.name, n=len(self._probki)),
             style="Status.TLabel",
         ).grid(row=0, column=0, columnspan=3, sticky="w")
 
         ttk.Label(
             ramka,
-            text="Posłuchaj próbki i wpisz imię. Puste pole zostawia "
-                 "oznaczenie MÓWCA 1, MÓWCA 2…",
+            text=t("Posłuchaj próbki i wpisz imię. Puste pole zostawia "
+                   "oznaczenie MÓWCA 1, MÓWCA 2…"),
             style="Dim.TLabel",
         ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 14))
 
         for i, (numer, start, _dlugosc) in enumerate(self._probki):
             wiersz = 2 + i
-            ttk.Label(ramka, text=f"MÓWCA {numer + 1}").grid(
+            ttk.Label(ramka, text=t("MÓWCA {n}").format(n=numer + 1)).grid(
                 row=wiersz, column=0, sticky="w", pady=4, padx=(0, 10)
             )
             ttk.Button(
                 ramka,
-                text=f"▶  Posłuchaj  ({_czas(start)})",
+                text=t("▶  Posłuchaj  ({czas})").format(czas=_czas(start)),
                 command=lambda n=numer: self._odtworz(n),
             ).grid(row=wiersz, column=1, sticky="w", padx=(0, 10))
 
@@ -235,14 +236,14 @@ class SpeakerDialog:
             row=wiersz_statusu + 1, column=0, columnspan=3, sticky="ew", pady=(14, 0)
         )
         przyciski.columnconfigure(1, weight=1)
-        ttk.Button(przyciski, text="Pomiń", command=self._pomin).grid(
+        ttk.Button(przyciski, text=t("Pomiń"), command=self._pomin).grid(
             row=0, column=0, sticky="w"
         )
-        ttk.Button(przyciski, text="⏹  Zatrzymaj", command=self._zatrzymaj).grid(
+        ttk.Button(przyciski, text=t("⏹  Zatrzymaj"), command=self._zatrzymaj).grid(
             row=0, column=1, sticky="w", padx=(8, 0)
         )
         ttk.Button(
-            przyciski, text="Zastosuj", style="Accent.TButton", command=self._zastosuj
+            przyciski, text=t("Zastosuj"), style="Accent.TButton", command=self._zastosuj
         ).grid(row=0, column=2, sticky="e")
 
         self.win.bind("<Return>", lambda _e: self._zastosuj())
@@ -273,7 +274,7 @@ class SpeakerDialog:
         """
         wybrany = next((p for p in self._probki if p[0] == mowca), None)
         if wybrany is None:
-            self._powiedz(f"Brak próbki dla MÓWCY {mowca + 1}.", blad=True)
+            self._powiedz(t("Brak próbki dla MÓWCY {n}.").format(n=mowca + 1), blad=True)
             return
 
         _, start, dlugosc = wybrany
@@ -282,10 +283,10 @@ class SpeakerDialog:
         try:
             plik = self._wytnij(mowca, start, min(PROBKA_S, dlugosc))
         except Exception as exc:
-            self._powiedz(f"Nie udało się wyciąć próbki: {exc}", blad=True)
+            self._powiedz(t("Nie udało się wyciąć próbki: {blad}").format(blad=exc), blad=True)
             return
 
-        ostatni: Exception = RuntimeError("brak metody odtwarzania")
+        ostatni: Exception = RuntimeError(t("brak metody odtwarzania"))
         for zagraj in (_zagraj_winsound, _zagraj_mci):
             try:
                 zagraj(plik)
@@ -295,13 +296,13 @@ class SpeakerDialog:
             # Nie da się sprawdzić z programu, czy dźwięk doszło do uszu —
             # więc od razu podpowiadamy, gdzie szukać, gdy nie doszedł.
             self._powiedz(
-                f"Odtwarzam MÓWCĘ {mowca + 1} — fragment od {_czas(start)}, "
-                f"{min(PROBKA_S, dlugosc):.0f} s. Nie słyszysz? Sprawdź "
-                f"głośność programu {APP_NAME} w mikserze Windows."
+                t("Odtwarzam MÓWCĘ {n} — fragment od {czas}, {s:.0f} s. Nie słyszysz? "
+                  "Sprawdź głośność programu {app} w mikserze Windows.").format(
+                    n=mowca + 1, czas=_czas(start), s=min(PROBKA_S, dlugosc), app=APP_NAME)
             )
             return
 
-        self._powiedz(f"Nie udało się odtworzyć próbki: {ostatni}", blad=True)
+        self._powiedz(t("Nie udało się odtworzyć próbki: {blad}").format(blad=ostatni), blad=True)
 
     def _zatrzymaj(self) -> None:
         _cisza()
@@ -312,9 +313,9 @@ class SpeakerDialog:
 
         ffmpeg, _ = find_ffmpeg()
         if not ffmpeg:
-            raise RuntimeError("nie znaleziono ffmpeg")
+            raise RuntimeError(t("nie znaleziono ffmpeg"))
         if not self.audio.is_file():
-            raise RuntimeError(f"nie ma już pliku {self.audio.name}")
+            raise RuntimeError(t("nie ma już pliku {plik}").format(plik=self.audio.name))
 
         cel = Path(tempfile.gettempdir()) / (
             f"wa_probka_{mowca + 1}_{int(start * 1000)}.wav"
@@ -338,10 +339,10 @@ class SpeakerDialog:
         if wynik.returncode != 0:
             powod = (wynik.stderr or "").strip().splitlines()
             raise RuntimeError(
-                powod[-1][:200] if powod else f"ffmpeg zwrócił {wynik.returncode}"
+                powod[-1][:200] if powod else t("ffmpeg zwrócił {kod}").format(kod=wynik.returncode)
             )
         if not cel.is_file() or cel.stat().st_size < MIN_WAV_BAJTOW:
-            raise RuntimeError("ffmpeg zapisał pusty plik")
+            raise RuntimeError(t("ffmpeg zapisał pusty plik"))
 
         self._tymczasowe.append(cel)
         return cel

@@ -15,6 +15,8 @@ import sys
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+from ..teksty import t
+
 # ---------------------------------------------------------------------------
 # Katalog modeli
 # ---------------------------------------------------------------------------
@@ -227,7 +229,7 @@ def cpu_name() -> str:
     except (ImportError, OSError):
         pass
 
-    return os.environ.get("PROCESSOR_IDENTIFIER", "nieznany")
+    return os.environ.get("PROCESSOR_IDENTIFIER") or t("nieznany")
 
 
 def physical_cores() -> int:
@@ -412,23 +414,27 @@ def recommend(hw: Hardware) -> Recommendation:
     warnings: List[str] = []
 
     if hw.ffmpeg is None:
-        warnings.append("Nie znaleziono ffmpeg — bez niego nie da się czytać wideo.")
+        warnings.append(t("Nie znaleziono ffmpeg — bez niego nie da się czytać wideo."))
 
     bez_sterownika = hw.nvidia_without_driver
     if bez_sterownika:
         warnings.append(
-            f"W komputerze jest karta „{bez_sterownika}”, ale nie odpowiada "
-            f"nvidia-smi — najpewniej brakuje sterownika NVIDIA. Po jego "
-            f"instalacji uruchom setup.bat ponownie, żeby przejść na GPU."
+            t(
+                "W komputerze jest karta „{karta}”, ale nie odpowiada "
+                "nvidia-smi — najpewniej brakuje sterownika NVIDIA. Po jego "
+                "instalacji uruchom setup.bat ponownie, żeby przejść na GPU."
+            ).format(karta=bez_sterownika)
         )
 
     gpu = hw.gpu
     if gpu is not None and not gpu.supports_cuda12:
         warnings.append(
-            f"Sterownik karty {gpu.name} ma wersję {gpu.driver}, a biblioteki "
-            f"CUDA 12 wymagają co najmniej {MIN_DRIVER_CUDA12:g}. Zaktualizuj "
-            f"sterownik ze strony nvidia.com/drivers i uruchom setup.bat "
-            f"ponownie — do tego czasu liczę na procesorze."
+            t(
+                "Sterownik karty {karta} ma wersję {sterownik}, a biblioteki "
+                "CUDA 12 wymagają co najmniej {minimum:g}. Zaktualizuj "
+                "sterownik ze strony nvidia.com/drivers i uruchom setup.bat "
+                "ponownie — do tego czasu liczę na procesorze."
+            ).format(karta=gpu.name, sterownik=gpu.driver, minimum=MIN_DRIVER_CUDA12)
         )
         gpu = None
 
@@ -438,9 +444,11 @@ def recommend(hw: Hardware) -> Recommendation:
 
         if gpu.generation < 6.1:
             warnings.append(
-                f"{gpu.name} to układ starszej generacji (compute capability "
-                f"{gpu.generation:g}) — brakuje mu sprzętowego wsparcia dla "
-                f"obliczeń int8, więc przewaga nad procesorem będzie niewielka."
+                t(
+                    "{karta} to układ starszej generacji (compute capability "
+                    "{generacja:g}) — brakuje mu sprzętowego wsparcia dla "
+                    "obliczeń int8, więc przewaga nad procesorem będzie niewielka."
+                ).format(karta=gpu.name, generacja=gpu.generation)
             )
 
         if gpu.generation >= 7.0:
@@ -471,15 +479,19 @@ def recommend(hw: Hardware) -> Recommendation:
             kandydaci.sort(key=lambda k: (k[0], k[1]))
             _ranga, _prio, name, compute_type, pelna_precyzja = kandydaci[0]
             if pelna_precyzja:
-                powod = (
-                    f"{gpu.name} ma {gpu.vram_gb:g} GB VRAM — model {name} "
-                    f"mieści się w pełnej precyzji {compute_type}."
+                powod = t(
+                    "{karta} ma {vram:g} GB VRAM — model {model} "
+                    "mieści się w pełnej precyzji {precyzja}."
+                ).format(
+                    karta=gpu.name, vram=gpu.vram_gb, model=name, precyzja=compute_type
                 )
             else:
-                powod = (
-                    f"{gpu.name} ma {gpu.vram_gb:g} GB VRAM — model {name} "
-                    f"w kwantyzacji {compute_type} zmieści się z zapasem "
-                    f"i będzie wielokrotnie szybszy niż CPU."
+                powod = t(
+                    "{karta} ma {vram:g} GB VRAM — model {model} "
+                    "w kwantyzacji {precyzja} zmieści się z zapasem "
+                    "i będzie wielokrotnie szybszy niż CPU."
+                ).format(
+                    karta=gpu.name, vram=gpu.vram_gb, model=name, precyzja=compute_type
                 )
             return Recommendation(
                 model=name,
@@ -491,8 +503,10 @@ def recommend(hw: Hardware) -> Recommendation:
             )
 
         warnings.append(
-            f"{gpu.name} ma za mało VRAM ({gpu.vram_gb:g} GB) nawet dla modelu tiny "
-            "— przechodzę na CPU."
+            t(
+                "{karta} ma za mało VRAM ({vram:g} GB) nawet dla modelu tiny "
+                "— przechodzę na CPU."
+            ).format(karta=gpu.name, vram=gpu.vram_gb)
         )
 
     # --- CPU ---
@@ -507,11 +521,11 @@ def recommend(hw: Hardware) -> Recommendation:
                 model=name,
                 device="cpu",
                 compute_type="int8",
-                reason=(
-                    f"Brak karty NVIDIA. Przy {ram:g} GB RAM i {threads} wątkach "
-                    f"model {name} (int8) to rozsądny kompromis — transkrypcja "
-                    f"potrwa kilka razy dłużej niż na GPU."
-                ),
+                reason=t(
+                    "Brak karty NVIDIA. Przy {ram:g} GB RAM i {watki} wątkach "
+                    "model {model} (int8) to rozsądny kompromis — transkrypcja "
+                    "potrwa kilka razy dłużej niż na GPU."
+                ).format(ram=ram, watki=threads, model=name),
                 alternatives=_alternatives(name),
                 warnings=warnings,
             )
@@ -520,7 +534,7 @@ def recommend(hw: Hardware) -> Recommendation:
         model="base",
         device="cpu",
         compute_type="int8",
-        reason="Słaby sprzęt — bezpiecznym wyborem jest mały model base na CPU.",
+        reason=t("Słaby sprzęt — bezpiecznym wyborem jest mały model base na CPU."),
         alternatives=_alternatives("base"),
         warnings=warnings,
     )
@@ -576,54 +590,83 @@ def fits(model: str, hw: Hardware, device: str) -> bool:
 
 def format_report(hw: Hardware, rec: Recommendation) -> str:
     """Czytelny raport diagnostyczny — używany w GUI i w konsoli."""
-    lines = [
+    # Wiersz to para (etykieta, wartość) albo gotowy napis (nagłówek sekcji,
+    # pusta linia). Etykiety wyrównuje się do najdłuższej dopiero przy
+    # składaniu, bo po angielsku mają inne długości niż po polsku.
+    wiersze: list = [
         "SYSTEM",
-        f"  System       : {hw.os_name}",
-        f"  Python       : {hw.python_version}",
-        f"  Interpreter  : {hw.python_exe}",
+        ("System", hw.os_name),
+        ("Python", hw.python_version),
+        ("Interpreter", hw.python_exe),
         "",
-        "SPRZĘT",
-        f"  Procesor     : {hw.cpu_name}",
-        f"  Rdzenie      : {hw.cpu_cores} fizycznych / {hw.cpu_threads} wątków",
-        f"  RAM          : {hw.ram_gb:g} GB",
-        f"  Dysk (wolne) : {hw.disk_free_gb:g} GB",
+        t("SPRZĘT"),
+        (t("Procesor"), hw.cpu_name),
+        (
+            t("Rdzenie"),
+            t("{fizyczne} fizycznych / {watki} wątków").format(
+                fizyczne=hw.cpu_cores, watki=hw.cpu_threads
+            ),
+        ),
+        ("RAM", f"{hw.ram_gb:g} GB"),
+        (t("Dysk (wolne)"), f"{hw.disk_free_gb:g} GB"),
     ]
     if hw.gpus:
         for g in hw.gpus:
             generacja = (
-                f", generacja {g.compute_capability:g}"
+                t(", generacja {generacja:g}").format(generacja=g.compute_capability)
                 if g.compute_capability
                 else ""
             )
-            lines.append(
-                f"  GPU          : {g.name} — {g.vram_gb:g} GB VRAM, "
-                f"sterownik {g.driver}, CUDA {g.cuda_runtime}{generacja}"
+            wiersze.append(
+                (
+                    "GPU",
+                    t(
+                        "{karta} — {vram:g} GB VRAM, "
+                        "sterownik {sterownik}, CUDA {cuda}{generacja}"
+                    ).format(
+                        karta=g.name,
+                        vram=g.vram_gb,
+                        sterownik=g.driver,
+                        cuda=g.cuda_runtime,
+                        generacja=generacja,
+                    ),
+                )
             )
     elif hw.nvidia_without_driver:
-        lines.append(
-            f"  GPU          : {hw.nvidia_without_driver} — wykryta, ale bez "
-            f"sterownika NVIDIA (transkrypcja na CPU)"
+        wiersze.append(
+            (
+                "GPU",
+                t(
+                    "{karta} — wykryta, ale bez "
+                    "sterownika NVIDIA (transkrypcja na CPU)"
+                ).format(karta=hw.nvidia_without_driver),
+            )
         )
     else:
-        lines.append("  GPU          : brak karty NVIDIA (transkrypcja na CPU)")
+        wiersze.append(("GPU", t("brak karty NVIDIA (transkrypcja na CPU)")))
         for name in hw.adapters:
-            lines.append(f"  Karta obrazu : {name}")
+            wiersze.append((t("Karta obrazu"), name))
 
-    lines += [
+    wiersze += [
         "",
-        "NARZĘDZIA",
-        f"  ffmpeg       : {hw.ffmpeg or 'BRAK'}",
-        f"  ffprobe      : {hw.ffprobe or 'BRAK'}",
+        t("NARZĘDZIA"),
+        ("ffmpeg", hw.ffmpeg or t("BRAK")),
+        ("ffprobe", hw.ffprobe or t("BRAK")),
         "",
-        "REKOMENDACJA",
-        f"  Model        : {rec.model}",
-        f"  Urządzenie   : {rec.device}",
-        f"  Precyzja     : {rec.compute_type}",
-        f"  Uzasadnienie : {rec.reason}",
+        t("REKOMENDACJA"),
+        ("Model", rec.model),
+        (t("Urządzenie"), rec.device),
+        (t("Precyzja"), rec.compute_type),
+        (t("Uzasadnienie"), rec.reason),
     ]
     for w in rec.warnings:
-        lines.append(f"  UWAGA        : {w}")
-    return "\n".join(lines)
+        wiersze.append((t("UWAGA"), w))
+
+    szerokosc = max(len(w[0]) for w in wiersze if isinstance(w, tuple))
+    return "\n".join(
+        f"  {w[0]:<{szerokosc}} : {w[1]}" if isinstance(w, tuple) else w
+        for w in wiersze
+    )
 
 
 if __name__ == "__main__":

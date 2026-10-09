@@ -1,17 +1,20 @@
-"""Testy aktualizacji: wybór instalatora, adresy, podpis wydania.
+"""Testy aktualizacji: wybór instalatora, adresy, podpis wydania, folder firmowy.
 
-GitHub jest udawany przez podmianę `update._get` — żadnych połączeń.
+GitHub jest udawany przez podmianę `update._get`, udział sieciowy — katalogiem
+tymczasowym. Żadnych połączeń.
 """
 
+import hashlib
 import json
 import sys
+import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from whisper_automat.core import podpis, update  # noqa: E402
+from whisper_automat.core import download, podpis, update  # noqa: E402
 from whisper_automat.core.wydanie import WYDANIA  # noqa: E402
 
 KLUCZ = podpis.nowy_klucz()
@@ -166,6 +169,109 @@ class Sprawdzanie(unittest.TestCase):
     def test_brak_nowszej(self):
         update._get = UdawanyGitHub(wydanie_github([], tag="v1.1.0"))
         self.assertIsNone(update.sprawdz("1.1.0", WYD))
+
+
+FIRMA = replace(WYDANIA["firma"], klucz_publiczny=podpis.klucz_publiczny(KLUCZ).hex())
+
+
+class Folder(unittest.TestCase):
+    """Aktualizacje z folderu firmowego — udział sieciowy udawany katalogiem."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.folder = Path(self.tmp.name) / "wydania"
+        self.folder.mkdir()
+        self.wyd = replace(FIRMA, aktualizacje_folder=str(self.folder))
+        self.nazwa = "WhisperAutomat-1.4.0-Setup-offline.exe"
+        self.tresc = b"udawany instalator " * 1000
+        self.suma = hashlib.sha256(self.tresc).hexdigest()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _opublikuj(self, podpisz=True, klucz=KLUCZ, wersja="1.4.0", instalator=None):
+        nazwa = instalator or self.nazwa
+        (self.folder / self.nazwa).write_bytes(self.tresc)
+        if podpisz:
+            (self.folder / (nazwa + ".podpis")).write_text(
+                podpis.zapisz_podpis(nazwa, self.suma, klucz), encoding="utf-8")
+        (self.folder / update.MANIFEST).write_text(json.dumps({
+            "wersja": wersja, "instalator": nazwa, "rozmiar": len(self.tresc),
+            "opis": "Co nowego",
+        }), encoding="utf-8")
+
+    def test_zrodlo_wybiera_wydanie(self):
+        self.assertFalse(WYDANIA["firma"].aktualizacje)   # folder dopiero z paczki
+        self.assertTrue(self.wyd.aktualizacje)
+        self.assertTrue(WYDANIA["papuga"].aktualizacje)   # GitHub
+        self.assertEqual(WYDANIA["papuga"].aktualizacje_folder, "")
+
+    def test_podpisane_do_instalacji_i_kopia(self):
+        self._opublikuj()
+        akt = update.sprawdz("1.3.0", self.wyd)
+        self.assertEqual(akt.wersja, "1.4.0")
+        self.assertTrue(akt.podpisana)
+        self.assertEqual(akt.instalator.sha256, self.suma)
+        self.assertEqual(akt.opis, "Co nowego")
+        self.assertEqual(akt.strona, str(self.folder))
+        self.assertEqual(akt.uwaga, "")
+        self.assertTrue(update.mozna_zainstalowac(akt, self.wyd))
+
+        cel = Path(self.tmp.name) / "pobrane"
+        postepy = []
+        sciezka = download.kopiuj_plik(
+            Path(akt.url), cel, akt.instalator,
+            on_progress=lambda b, w, v: postepy.append((b, w)))
+        self.assertEqual(sciezka, cel / self.nazwa)
+        self.assertEqual(sciezka.read_bytes(), self.tresc)
+        self.assertEqual(postepy[-1], (len(self.tresc), len(self.tresc)))
+        self.assertFalse((cel / (self.nazwa + ".part")).exists())
+        # Druga kopia nie czyta źródła drugi raz — gotowy plik ze zgodną sumą zostaje.
+        (self.folder / self.nazwa).unlink()
+        self.assertEqual(download.kopiuj_plik(Path(akt.url), cel, akt.instalator), sciezka)
+
+    def test_bez_podpisu_nie_instaluje(self):
+        self._opublikuj(podpisz=False)
+        akt = update.sprawdz("1.3.0", self.wyd)
+        self.assertEqual(akt.wersja, "1.4.0")
+        self.assertFalse(update.mozna_zainstalowac(akt, self.wyd))
+        self.assertIn("podpis", akt.uwaga.lower())
+
+    def test_obcy_klucz(self):
+        self._opublikuj(klucz=podpis.nowy_klucz())
+        akt = update.sprawdz("1.3.0", self.wyd)
+        self.assertFalse(update.mozna_zainstalowac(akt, self.wyd))
+
+    def test_bez_klucza_w_programie_nie_instaluje(self):
+        # Z folderu nie ma furtki „sama suma wystarczy” — udział bywa zapisywalny.
+        self._opublikuj()
+        bez = replace(self.wyd, klucz_publiczny="")
+        self.assertFalse(update.mozna_zainstalowac(update.sprawdz("1.3.0", bez), bez))
+
+    def test_pusty_folder_i_brak_nowszej(self):
+        self.assertIsNone(update.sprawdz("1.3.0", self.wyd))
+        self._opublikuj(wersja="1.3.0")
+        self.assertIsNone(update.sprawdz("1.3.0", self.wyd))
+
+    def test_folder_niedostepny(self):
+        wyd = replace(self.wyd, aktualizacje_folder=str(self.folder / "nie-ma"))
+        with self.assertRaises(update.UpdateError):
+            update.sprawdz("1.3.0", wyd)
+
+    def test_instalator_ze_sciezka_odrzucony(self):
+        self._opublikuj(instalator="..\\" + self.nazwa)
+        akt = update.sprawdz("1.3.0", self.wyd)
+        self.assertEqual(akt.url, "")
+        self.assertFalse(update.mozna_zainstalowac(akt, self.wyd))
+
+    def test_kopia_z_niezgodna_suma(self):
+        plik = download.Plik(nazwa=self.nazwa, rozmiar=len(self.tresc), sha256="0" * 64)
+        (self.folder / self.nazwa).write_bytes(self.tresc)
+        cel = Path(self.tmp.name) / "pobrane"
+        with self.assertRaises(download.DownloadError):
+            download.kopiuj_plik(self.folder / self.nazwa, cel, plik)
+        self.assertFalse((cel / self.nazwa).exists())
+        self.assertFalse((cel / (self.nazwa + ".part")).exists())
 
 
 if __name__ == "__main__":

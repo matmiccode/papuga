@@ -52,6 +52,8 @@ from typing import Callable, List, Optional, Tuple
 
 import numpy as np
 
+from ..teksty import t
+
 #: Częstotliwość pliku i osi czasu. Taka sama jak wejście modelu.
 RATE = 16000
 #: Blok miksera: 100 ms.
@@ -661,10 +663,10 @@ class Nagrywarka:
     def start(self, katalog: Path, mikrofon: str = "", glosniki: str = "",
               zdarzenia: Optional[ZdarzeniaNagrywania] = None) -> Path:
         if self.stan != self.BEZCZYNNA:
-            raise BladNagrywania("Nagrywanie już trwa.")
+            raise BladNagrywania(t("Nagrywanie już trwa."))
         if not dostepne():
-            raise BladNagrywania(
-                "Brak biblioteki do nagrywania (PyAudioWPatch). Uruchom setup.bat.")
+            raise BladNagrywania(t(
+                "Brak biblioteki do nagrywania (PyAudioWPatch). Uruchom setup.bat."))
         katalog = Path(katalog)
         katalog.mkdir(parents=True, exist_ok=True)
         try:
@@ -672,9 +674,9 @@ class Nagrywarka:
         except OSError:
             wolne = MIN_WOLNE_B
         if wolne < MIN_WOLNE_B:
-            raise BladNagrywania(
-                f"Za mało miejsca na dysku ({wolne / 1e6:.0f} MB wolne). "
-                f"Godzina nagrania to około 50 MB.")
+            raise BladNagrywania(t(
+                "Za mało miejsca na dysku ({mb:.0f} MB wolne). "
+                "Godzina nagrania to około 50 MB.").format(mb=wolne / 1e6))
 
         self._zdarzenia = zdarzenia or ZdarzeniaNagrywania()
         self._stop.clear()
@@ -728,12 +730,14 @@ class Nagrywarka:
             mik = _znajdz(wejscia, mikrofon_nazwa)
             wy = _znajdz(wyjscia, glosniki_nazwa)
             if mik is None and (wy is None or wy.loopback_index is None):
-                raise BladNagrywania("Nie znaleziono ani mikrofonu, ani urządzenia "
-                                     "odtwarzającego dźwięk.")
+                raise BladNagrywania(t("Nie znaleziono ani mikrofonu, ani urządzenia "
+                                       "odtwarzającego dźwięk."))
             if mikrofon_nazwa and (mik is None or mik.nazwa != mikrofon_nazwa):
-                zd.ostrzezenie(f"Mikrofonu „{mikrofon_nazwa}” nie ma — używam domyślnego.")
+                zd.ostrzezenie(t("Mikrofonu „{nazwa}” nie ma — używam domyślnego.").format(
+                    nazwa=mikrofon_nazwa))
             if glosniki_nazwa and (wy is None or wy.nazwa != glosniki_nazwa):
-                zd.ostrzezenie(f"Urządzenia „{glosniki_nazwa}” nie ma — używam domyślnego.")
+                zd.ostrzezenie(t("Urządzenia „{nazwa}” nie ma — używam domyślnego.").format(
+                    nazwa=glosniki_nazwa))
 
             # Zegar: domena PortAudio (QPC). perf_counter na Windows to ten
             # sam licznik, więc wystarczy jednorazowe przesunięcie.
@@ -751,8 +755,8 @@ class Nagrywarka:
                 )
                 przesuniecie[0] = float(cichy.get_time()) - time.perf_counter()
             elif wy is not None:
-                zd.ostrzezenie("To urządzenie nie udostępnia dźwięku systemowego — "
-                               "nagrywam sam mikrofon.")
+                zd.ostrzezenie(t("To urządzenie nie udostępnia dźwięku systemowego — "
+                                 "nagrywam sam mikrofon."))
             # Zegar rusza przed otwarciem torów: pakiety sprzed zera oś czasu
             # odrzuca, a każdy następny ląduje tam, gdzie był naprawdę.
             # Otwarcie mikrofonu potrafi trwać 0,3 s — bez tego loopback
@@ -766,7 +770,7 @@ class Nagrywarka:
                 if not przesuniecie[0]:
                     przesuniecie[0] = float(tory["mikrofon"].stream.get_time()) - time.perf_counter()
             else:
-                zd.ostrzezenie("Brak mikrofonu — nagrywam sam dźwięk systemowy.")
+                zd.ostrzezenie(t("Brak mikrofonu — nagrywam sam dźwięk systemowy."))
             if zegar is None:
                 zegar = Zegar(teraz())
             osie = {k: OsCzasu() for k in ("mikrofon", "system")}
@@ -787,23 +791,23 @@ class Nagrywarka:
 
             while not self._stop.is_set():
                 time.sleep(0.1)
-                t = teraz()
-                if t - ostatnia_petla > MAX_LUKA_S:
+                chwila = teraz()
+                if chwila - ostatnia_petla > MAX_LUKA_S:
                     # Komputer spał. Zamiast pół godziny ciszy — sekunda.
-                    zegar.przesuniecie += (t - ostatnia_petla) - 1.0
-                    zd.ostrzezenie("Komputer był uśpiony — w nagraniu zostaje sekunda przerwy.")
-                ostatnia_petla = t
+                    zegar.przesuniecie += (chwila - ostatnia_petla) - 1.0
+                    zd.ostrzezenie(t("Komputer był uśpiony — w nagraniu zostaje sekunda przerwy."))
+                ostatnia_petla = chwila
 
                 for nazwa, tor in list(tory.items()):
                     zrodla[nazwa].przyjmij_wiele((tp, d) for tp, d, _s in tor.zbierz())
                     if not tor.aktywny() and nazwa not in martwe:
-                        martwe[nazwa] = t
-                        zd.ostrzezenie(
-                            ("Mikrofon" if nazwa == "mikrofon" else "Dźwięk systemowy")
-                            + " przestał odpowiadać (odłączone urządzenie?) — nagrywam "
-                              "dalej to, co zostało, i próbuję wznowić.")
-                    elif nazwa in martwe and t - martwe[nazwa] > 2.0:
-                        martwe[nazwa] = t
+                        martwe[nazwa] = chwila
+                        zd.ostrzezenie(t(
+                            "{kto} przestał odpowiadać (odłączone urządzenie?) — nagrywam "
+                            "dalej to, co zostało, i próbuję wznowić."
+                        ).format(kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk systemowy")))
+                    elif nazwa in martwe and chwila - martwe[nazwa] > 2.0:
+                        martwe[nazwa] = chwila
                         nowy = self._wznow(pa, nazwa, mikrofon_nazwa, glosniki_nazwa, teraz)
                         if nowy is not None:
                             p2, tor_nowy, cichy_nowy = nowy
@@ -821,25 +825,25 @@ class Nagrywarka:
                             zrodla[nazwa] = Zrodlo(nazwa, tor_nowy.rate, tor_nowy.kanaly,
                                                    zegar, osie[nazwa], tor_nowy.opoznienie)
                             del martwe[nazwa]
-                            zd.ostrzezenie(("Mikrofon" if nazwa == "mikrofon"
-                                            else "Dźwięk systemowy") + " wznowiony.")
+                            zd.ostrzezenie(t("{kto} wznowiony.").format(
+                                kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk systemowy")))
 
-                cel = zegar.pozycja(t) - int(BUFOR_S * RATE)
+                cel = zegar.pozycja(chwila) - int(BUFOR_S * RATE)
                 while wydane + BLOK <= cel:
                     zapis.zapisz(miksuj(osie["mikrofon"].pobierz(wydane, BLOK),
                                         osie["system"].pobierz(wydane, BLOK)))
                     wydane += BLOK
                 self.czas_trwania = wydane / RATE
 
-                if t - ostatnie_poziomy >= 0.1:
-                    ostatnie_poziomy = t
+                if chwila - ostatnie_poziomy >= 0.1:
+                    ostatnie_poziomy = chwila
                     zd.poziomy(zrodla["mikrofon"].rms_dbfs if "mikrofon" in zrodla else -120.0,
                                zrodla["system"].rms_dbfs if "system" in zrodla else -120.0)
-                if t - ostatni_czas >= 1.0:
-                    ostatni_czas = t
+                if chwila - ostatni_czas >= 1.0:
+                    ostatni_czas = chwila
                     zd.czas(self.czas_trwania)
-                if t - ostatni_fsync >= 30.0:
-                    ostatni_fsync = t
+                if chwila - ostatni_fsync >= 30.0:
+                    ostatni_fsync = chwila
                     zapis.fsync()
 
             # Koniec: zatrzymaj strumienie, dobierz resztki, domknij plik.
@@ -886,7 +890,7 @@ class Nagrywarka:
                 zd.anulowano()
         except Exception as exc:
             komunikat = str(exc) if isinstance(exc, BladNagrywania) else (
-                f"Nagrywanie przerwane: {type(exc).__name__}: {exc}")
+                t("Nagrywanie przerwane: {blad}").format(blad=f"{type(exc).__name__}: {exc}"))
             for tor in tory.values():
                 tor.zamknij()
             if cichy is not None:

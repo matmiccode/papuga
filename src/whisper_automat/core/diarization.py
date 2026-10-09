@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Callable, List, Optional
 
 from .wydanie import biezace
+from ..teksty import t
 
 #: Skąd biorą się modele. Repozytoria projektu sherpa-onnx, bez logowania
 #: i bez akceptowania licencji — w przeciwieństwie do modeli pyannote.
@@ -138,13 +139,13 @@ def pobierz_modele(log: Optional[Callable[[str], None]] = None) -> None:
     try:
         odciski = baza / "odciski.onnx"
         if not odciski.is_file():
-            log("Pobieram model odcisków głosu (38 MB)…")
+            log(t("Pobieram model odcisków głosu (38 MB)…"))
             _pobierz(MODELE["odciski"], odciski)
             _sprawdz_sume(odciski, SUMY["odciski"])
 
         segmentacja = baza / "segmentacja" / "model.onnx"
         if not segmentacja.is_file():
-            log("Pobieram model segmentacji (6 MB)…")
+            log(t("Pobieram model segmentacji (6 MB)…"))
             with tempfile.TemporaryDirectory() as tymczasowy:
                 archiwum = Path(tymczasowy) / "seg.tar.bz2"
                 _pobierz(MODELE["segmentacja"], archiwum)
@@ -163,13 +164,13 @@ def pobierz_modele(log: Optional[Callable[[str], None]] = None) -> None:
     except Exception as exc:
         wskazowka = opisz_blad_sieci(exc)
         raise DiarizationError(
-            f"Nie udało się pobrać modeli rozpoznawania mówców.\n\n"
-            f"{wskazowka or exc}"
+            t("Nie udało się pobrać modeli rozpoznawania mówców.")
+            + f"\n\n{wskazowka or exc}"
         ) from exc
 
     if not modele_gotowe():
-        raise DiarizationError("Pobieranie modeli zakończyło się niekompletnie.")
-    log("Modele rozpoznawania mówców gotowe.")
+        raise DiarizationError(t("Pobieranie modeli zakończyło się niekompletnie."))
+    log(t("Modele rozpoznawania mówców gotowe."))
 
 
 def _sprawdz_sume(plik: Path, oczekiwana: str) -> None:
@@ -182,8 +183,10 @@ def _sprawdz_sume(plik: Path, oczekiwana: str) -> None:
     if skrot.hexdigest() != oczekiwana:
         plik.unlink(missing_ok=True)
         raise DiarizationError(
-            f"Pobrany plik {plik.name} różni się od oczekiwanego (niezgodna suma "
-            f"kontrolna). Został usunięty — spróbuj ponownie."
+            t(
+                "Pobrany plik {plik} różni się od oczekiwanego (niezgodna suma "
+                "kontrolna). Został usunięty — spróbuj ponownie."
+            ).format(plik=plik.name)
         )
 
 
@@ -204,7 +207,7 @@ def _wczytaj_wav(sciezka: Path):
     with wave.open(str(sciezka)) as w:
         if w.getsampwidth() != 2 or w.getnchannels() != 1:
             raise DiarizationError(
-                "Oczekiwano 16-bitowego WAV mono — plik nie przeszedł konwersji."
+                t("Oczekiwano 16-bitowego WAV mono — plik nie przeszedł konwersji.")
             )
         czestotliwosc = w.getframerate()
         ramki = w.readframes(w.getnframes())
@@ -228,7 +231,7 @@ def rozpoznaj_mowcow(
     log = log or (lambda _m: None)
     if not dostepne():
         raise DiarizationError(
-            "Brak biblioteki sherpa-onnx. Uruchom setup.bat, żeby ją doinstalować."
+            t("Brak biblioteki sherpa-onnx. Uruchom setup.bat, żeby ją doinstalować.")
         )
 
     pobierz_modele(log)
@@ -255,17 +258,21 @@ def rozpoznaj_mowcow(
         min_duration_off=0.5,
     )
     if not cfg.validate():
-        raise DiarizationError("Błędna konfiguracja rozpoznawania mówców.")
+        raise DiarizationError(t("Błędna konfiguracja rozpoznawania mówców."))
 
     try:
         silnik = sherpa_onnx.OfflineSpeakerDiarization(cfg)
     except Exception as exc:
-        raise DiarizationError(f"Nie udało się uruchomić: {exc}") from exc
+        raise DiarizationError(
+            t("Nie udało się uruchomić: {blad}").format(blad=exc)
+        ) from exc
 
     probki, czestotliwosc = _wczytaj_wav(audio)
     if czestotliwosc != silnik.sample_rate:
         raise DiarizationError(
-            f"Oczekiwano {silnik.sample_rate} Hz, plik ma {czestotliwosc} Hz."
+            t("Oczekiwano {oczekiwane} Hz, plik ma {jest} Hz.").format(
+                oczekiwane=silnik.sample_rate, jest=czestotliwosc
+            )
         )
 
     def postep(przetworzone: int, wszystkie: int) -> int:
@@ -279,16 +286,20 @@ def rozpoznaj_mowcow(
         # Starsze wydania nie przyjmują callbacku postępu.
         wynik = silnik.process(probki).sort_by_start_time()
     except Exception as exc:
-        raise DiarizationError(f"Rozpoznawanie mówców nie powiodło się: {exc}") from exc
+        raise DiarizationError(
+            t("Rozpoznawanie mówców nie powiodło się: {blad}").format(blad=exc)
+        ) from exc
 
     odcinki = [Odcinek(s.start, s.end, s.speaker) for s in wynik]
 
     odcinki, szum = odrzuc_szum(odcinki)
     if szum:
         log(
-            f"Pominięto {szum} grup(y) o łącznym czasie mowy poniżej "
-            f"{MIN_MOWCA_S:g} s — to zwykle nakładające się głosy albo szum, "
-            f"nie osobny mówca."
+            t(
+                "Pominięto {n} grup(y) o łącznym czasie mowy poniżej "
+                "{prog:g} s — to zwykle nakładające się głosy albo szum, "
+                "nie osobny mówca."
+            ).format(n=szum, prog=MIN_MOWCA_S)
         )
     return przenumeruj(odcinki)
 
@@ -468,4 +479,4 @@ def etykieta(numer: int, nazwy: Optional[dict] = None) -> str:
         wlasna = nazwy.get(numer)
         if wlasna:
             return wlasna
-    return f"MÓWCA {numer + 1}"
+    return t("MÓWCA {n}").format(n=numer + 1)

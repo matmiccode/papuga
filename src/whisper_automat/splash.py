@@ -12,6 +12,7 @@ import tkinter as tk
 from typing import Optional
 
 from .core.config import APP_NAME, WYDANIE, asset
+from .teksty import t
 
 from .theme import ACCENT, BG, FG, FG_DIM, FONT, FONT_SEMI
 from .theme import BG_INPUT as BG_TOR
@@ -59,7 +60,7 @@ class Splash:
 
         if WYDANIE.haslo:
             tk.Label(
-                wnetrze, text=WYDANIE.haslo, bg=BG, fg=FG_DIM, font=(FONT, 10)
+                wnetrze, text=t(WYDANIE.haslo), bg=BG, fg=FG_DIM, font=(FONT, 10)
             ).pack()
 
         if podpis:
@@ -67,7 +68,7 @@ class Splash:
                 wnetrze, text=podpis, bg=BG, fg=FG_DIM, font=(FONT, 8)
             ).pack(pady=(2, 0))
 
-        self._status = tk.StringVar(value="Uruchamianie…")
+        self._status = tk.StringVar(value=t("Uruchamianie…"))
         tk.Label(
             wnetrze,
             textvariable=self._status,

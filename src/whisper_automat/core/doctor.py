@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from . import probe
 from .config import APP_NAME, WYDANIE, models_dir
+from ..teksty import t
 
 OK = "OK"
 WARN = "UWAGA"
@@ -82,8 +83,10 @@ def diagnose() -> Diagnosis:
             Check(
                 "Python",
                 FAIL,
-                f"{py.major}.{py.minor} to za stara wersja",
-                f"Zainstaluj Pythona {MIN_PYTHON[0]}.{MIN_PYTHON[1]} lub nowszego.",
+                t("{wersja} to za stara wersja").format(wersja=f"{py.major}.{py.minor}"),
+                t("Zainstaluj Pythona {wersja} lub nowszego.").format(
+                    wersja=f"{MIN_PYTHON[0]}.{MIN_PYTHON[1]}"
+                ),
             )
         )
 
@@ -96,35 +99,45 @@ def diagnose() -> Diagnosis:
             Check(
                 "ffmpeg",
                 FAIL,
-                f"nie znaleziono {missing} w PATH",
-                "Uruchom setup.bat albo: winget install Gyan.FFmpeg",
+                t("nie znaleziono {program} w PATH").format(program=missing),
+                t("Uruchom setup.bat albo: winget install Gyan.FFmpeg"),
             )
         )
 
     # --- silnik ---
     if _installed("faster_whisper"):
         checks.append(
-            Check("faster-whisper", OK, f"wersja {_version_of('faster-whisper')}")
+            Check(
+                "faster-whisper",
+                OK,
+                t("wersja {wersja}").format(wersja=_version_of("faster-whisper")),
+            )
         )
     else:
         checks.append(
             Check(
                 "faster-whisper",
                 FAIL,
-                "nie zainstalowano silnika transkrypcji",
-                "Uruchom setup.bat.",
+                t("nie zainstalowano silnika transkrypcji"),
+                t("Uruchom setup.bat."),
             )
         )
 
     if _installed("ctranslate2"):
         checks.append(
-            Check("CTranslate2", OK, f"wersja {_version_of('ctranslate2')}")
+            Check(
+                "CTranslate2",
+                OK,
+                t("wersja {wersja}").format(wersja=_version_of("ctranslate2")),
+            )
         )
 
     # --- GPU ---
     if hw.has_cuda_gpu:
         gpu = hw.gpu
-        detail = f"{gpu.name}, {gpu.vram_gb:g} GB VRAM, sterownik {gpu.driver}"
+        detail = t("{karta}, {vram:g} GB VRAM, sterownik {sterownik}").format(
+            karta=gpu.name, vram=gpu.vram_gb, sterownik=gpu.driver
+        )
         if cuda_usable():
             checks.append(Check("GPU / CUDA", OK, detail))
         else:
@@ -132,10 +145,14 @@ def diagnose() -> Diagnosis:
                 Check(
                     "GPU / CUDA",
                     WARN,
-                    f"{detail} — wykryta, ale silnik jej nie widzi "
-                    f"(brak bibliotek cuBLAS/cuDNN)",
-                    "Uruchom setup.bat — doinstaluje nvidia-cublas-cu12 "
-                    "i nvidia-cudnn-cu12. Bez tego transkrypcja pójdzie na CPU.",
+                    t(
+                        "{opis} — wykryta, ale silnik jej nie widzi "
+                        "(brak bibliotek cuBLAS/cuDNN)"
+                    ).format(opis=detail),
+                    t(
+                        "Uruchom setup.bat — doinstaluje nvidia-cublas-cu12 "
+                        "i nvidia-cudnn-cu12. Bez tego transkrypcja pójdzie na CPU."
+                    ),
                 )
             )
     elif hw.nvidia_without_driver:
@@ -143,10 +160,14 @@ def diagnose() -> Diagnosis:
             Check(
                 "GPU / CUDA",
                 WARN,
-                f"{hw.nvidia_without_driver} — karta jest, ale nie ma sterownika",
-                "Zainstaluj sterownik ze strony nvidia.com/drivers (albo przez "
-                "GeForce Experience), potem uruchom setup.bat ponownie. "
-                "Transkrypcja przyspieszy kilkukrotnie.",
+                t("{karta} — karta jest, ale nie ma sterownika").format(
+                    karta=hw.nvidia_without_driver
+                ),
+                t(
+                    "Zainstaluj sterownik ze strony nvidia.com/drivers (albo przez "
+                    "GeForce Experience), potem uruchom setup.bat ponownie. "
+                    "Transkrypcja przyspieszy kilkukrotnie."
+                ),
             )
         )
     else:
@@ -154,19 +175,19 @@ def diagnose() -> Diagnosis:
             Check(
                 "GPU / CUDA",
                 WARN,
-                "brak karty NVIDIA — transkrypcja na CPU (kilka razy wolniej)",
+                t("brak karty NVIDIA — transkrypcja na CPU (kilka razy wolniej)"),
             )
         )
 
     # --- drag & drop ---
     if _installed("tkinterdnd2"):
-        checks.append(Check("Drag & drop", OK, "tkinterdnd2 zainstalowane"))
+        checks.append(Check("Drag & drop", OK, t("tkinterdnd2 zainstalowane")))
     else:
         checks.append(
             Check(
                 "Drag & drop",
                 WARN,
-                "brak tkinterdnd2 — pliki trzeba wybierać przyciskiem",
+                t("brak tkinterdnd2 — pliki trzeba wybierać przyciskiem"),
                 "pip install tkinterdnd2",
             )
         )
@@ -177,28 +198,34 @@ def diagnose() -> Diagnosis:
     if not diarization.dostepne():
         checks.append(
             Check(
-                "Rozpoznawanie mówców",
+                t("Rozpoznawanie mówców"),
                 WARN,
-                "brak biblioteki sherpa-onnx — funkcja będzie niedostępna",
-                "Uruchom setup.bat albo: pip install sherpa-onnx",
+                t("brak biblioteki sherpa-onnx — funkcja będzie niedostępna"),
+                t("Uruchom setup.bat albo: pip install sherpa-onnx"),
             )
         )
     elif diarization.modele_gotowe():
         checks.append(
             Check(
-                "Rozpoznawanie mówców",
+                t("Rozpoznawanie mówców"),
                 OK,
-                f"sherpa-onnx {_version_of('sherpa-onnx')}, modele na miejscu",
+                t("sherpa-onnx {wersja}, modele na miejscu").format(
+                    wersja=_version_of("sherpa-onnx")
+                ),
             )
         )
     else:
         checks.append(
             Check(
-                "Rozpoznawanie mówców",
+                t("Rozpoznawanie mówców"),
                 WARN,
-                f"sherpa-onnx {_version_of('sherpa-onnx')}, brak modeli głosów",
-                "Dwa modele (łącznie 44 MB) pobiorą się przy pierwszym użyciu "
-                "funkcji — potrzebny dostęp do github.com.",
+                t("sherpa-onnx {wersja}, brak modeli głosów").format(
+                    wersja=_version_of("sherpa-onnx")
+                ),
+                t(
+                    "Dwa modele (łącznie 44 MB) pobiorą się przy pierwszym użyciu "
+                    "funkcji — potrzebny dostęp do github.com."
+                ),
             )
         )
 
@@ -209,10 +236,10 @@ def diagnose() -> Diagnosis:
         if not nagrywanie.dostepne():
             checks.append(
                 Check(
-                    "Nagrywanie spotkań",
+                    t("Nagrywanie spotkań"),
                     FAIL,
-                    "brak biblioteki PyAudioWPatch — przycisk nagrywania nie zadziała",
-                    "Uruchom setup.bat albo: pip install PyAudioWPatch",
+                    t("brak biblioteki PyAudioWPatch — przycisk nagrywania nie zadziała"),
+                    t("Uruchom setup.bat albo: pip install PyAudioWPatch"),
                 )
             )
         else:
@@ -220,21 +247,25 @@ def diagnose() -> Diagnosis:
                 wejscia, wyjscia = nagrywanie.lista_urzadzen()
                 mik = nagrywanie._znajdz(wejscia, "")
                 wy = nagrywanie._znajdz(wyjscia, "")
-                opis = (f"PyAudioWPatch {_version_of('PyAudioWPatch')}; mikrofon: "
-                        f"{mik.nazwa if mik else 'brak'}; dźwięk systemowy z: "
-                        f"{wy.nazwa if wy else 'brak'}"
-                        + ("" if wy is None or wy.loopback_index is not None
-                           else " (bez loopbacku)"))
+                opis = t(
+                    "PyAudioWPatch {wersja}; mikrofon: {mikrofon}; "
+                    "dźwięk systemowy z: {wyjscie}"
+                ).format(
+                    wersja=_version_of("PyAudioWPatch"),
+                    mikrofon=mik.nazwa if mik else t("brak"),
+                    wyjscie=wy.nazwa if wy else t("brak"),
+                ) + ("" if wy is None or wy.loopback_index is not None
+                     else t(" (bez loopbacku)"))
                 stan = OK if mik is not None or (wy and wy.loopback_index is not None) else WARN
-                checks.append(Check("Nagrywanie spotkań", stan, opis,
-                                    "" if stan == OK else "Podłącz mikrofon albo słuchawki."))
+                checks.append(Check(t("Nagrywanie spotkań"), stan, opis,
+                                    "" if stan == OK else t("Podłącz mikrofon albo słuchawki.")))
             except Exception as exc:
                 checks.append(
                     Check(
-                        "Nagrywanie spotkań",
+                        t("Nagrywanie spotkań"),
                         WARN,
-                        f"nie udało się odczytać urządzeń WASAPI: {exc}",
-                        "Sprawdź w Ustawieniach Windows, czy urządzenia dźwięku działają.",
+                        t("nie udało się odczytać urządzeń WASAPI: {blad}").format(blad=exc),
+                        t("Sprawdź w Ustawieniach Windows, czy urządzenia dźwięku działają."),
                     )
                 )
 
@@ -246,17 +277,18 @@ def diagnose() -> Diagnosis:
         gdzie = katalogi_modeli()
         opis = ", ".join(sorted(cached))
         if gdzie:
-            opis += f" (w {gdzie[0]})"
-        checks.append(Check("Pobrane modele", OK, opis))
+            opis += t(" (w {katalog})").format(katalog=gdzie[0])
+        checks.append(Check(t("Pobrane modele"), OK, opis))
     else:
         checks.append(
             Check(
-                "Pobrane modele",
+                t("Pobrane modele"),
                 WARN,
-                "brak modeli w pamięci podręcznej",
-                f"Model {rec.model} (ok. {rozmiar_opis(rec.model)}) program "
-                f"zaproponuje pobrać przy uruchomieniu albo ściągnie go przed "
-                f"pierwszą transkrypcją.",
+                t("brak modeli w pamięci podręcznej"),
+                t(
+                    "Model {model} (ok. {rozmiar}) program zaproponuje pobrać "
+                    "przy uruchomieniu albo ściągnie go przed pierwszą transkrypcją."
+                ).format(model=rec.model, rozmiar=rozmiar_opis(rec.model)),
             )
         )
 
@@ -266,18 +298,20 @@ def diagnose() -> Diagnosis:
 
         osiagalne, opis = sprawdz_hub()
         if osiagalne:
-            checks.append(Check("Pobieranie modelu", OK, opis))
+            checks.append(Check(t("Pobieranie modelu"), OK, opis))
         else:
             checks.append(
                 Check(
-                    "Pobieranie modelu",
+                    t("Pobieranie modelu"),
                     FAIL,
                     opis,
-                    "Bez tego model się nie pobierze. W sieci firmowej zwykle "
-                    "wystarczy dostęp do huggingface.co; alternatywnie skopiuj "
-                    f"folder %LOCALAPPDATA%\\{WYDANIE.plik}\\models z komputera, "
-                    "na którym program już działa, albo zainstaluj wersję "
-                    "offline (z modelem w instalatorze).",
+                    t(
+                        "Bez tego model się nie pobierze. W sieci firmowej zwykle "
+                        "wystarczy dostęp do huggingface.co; alternatywnie skopiuj "
+                        "folder %LOCALAPPDATA%\\{wydanie}\\models z komputera, "
+                        "na którym program już działa, albo zainstaluj wersję "
+                        "offline (z modelem w instalatorze)."
+                    ).format(wydanie=WYDANIE.plik),
                 )
             )
 
@@ -285,16 +319,22 @@ def diagnose() -> Diagnosis:
     if hw.disk_free_gb < 5:
         checks.append(
             Check(
-                "Miejsce na dysku",
+                t("Miejsce na dysku"),
                 FAIL,
-                f"tylko {hw.disk_free_gb:g} GB wolnego",
-                "Zwolnij co najmniej 5 GB — modele i pliki tymczasowe "
-                "potrzebują miejsca.",
+                t("tylko {gb:g} GB wolnego").format(gb=hw.disk_free_gb),
+                t(
+                    "Zwolnij co najmniej 5 GB — modele i pliki tymczasowe "
+                    "potrzebują miejsca."
+                ),
             )
         )
     else:
         checks.append(
-            Check("Miejsce na dysku", OK, f"{hw.disk_free_gb:g} GB wolnego")
+            Check(
+                t("Miejsce na dysku"),
+                OK,
+                t("{gb:g} GB wolnego").format(gb=hw.disk_free_gb),
+            )
         )
 
     return Diagnosis(checks=checks, hardware=hw, recommendation=rec)
@@ -362,7 +402,7 @@ def format_diagnosis(diag: Diagnosis) -> str:
     width = max(len(c.name) for c in diag.checks) if diag.checks else 12
     lines = [
         "=" * 68,
-        f"  {APP_NAME.upper()} {__version__} — DIAGNOSTYKA ŚRODOWISKA",
+        f"  {APP_NAME.upper()} {__version__} — " + t("DIAGNOSTYKA ŚRODOWISKA"),
         "=" * 68,
         f"  {WYDANIE.wydawca}",
         "=" * 68,
@@ -381,9 +421,9 @@ def format_diagnosis(diag: Diagnosis) -> str:
 
     lines += ["", "=" * 68]
     if diag.ready:
-        lines.append("  Środowisko gotowe do pracy.")
+        lines.append("  " + t("Środowisko gotowe do pracy."))
     else:
-        lines.append("  Środowisko NIE jest kompletne — zobacz pozycje [X] powyżej.")
+        lines.append("  " + t("Środowisko NIE jest kompletne — zobacz pozycje [X] powyżej."))
     lines.append("=" * 68)
     return "\n".join(lines)
 

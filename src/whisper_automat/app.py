@@ -15,10 +15,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
 
-from . import __version__
+from . import __version__, teksty
 from .core import doctor, download, media, nagrywanie, probe, update
 from .core.config import (
-    APP_FULL_NAME, APP_ID, APP_NAME, LANGUAGES, WYDANIE, Settings, asset, default_output_dir,
+    APP_ID, APP_NAME, LANGUAGES, WYDANIE, Settings, asset, default_output_dir, is_frozen,
     models_dir, project_root,
 )
 from .core.engine import Cancelled
@@ -26,6 +26,7 @@ from .core.pipeline import (
     Callbacks, JobResult, Runner, clear_cache, model_do_pobrania,
 )
 from .core.writers import FORMAT_LABELS, FORMATS
+from .teksty import t
 
 APP_TITLE = APP_NAME
 
@@ -53,6 +54,11 @@ def _hms(sekundy: float) -> str:
 
 def _skroc(tekst: str, limit: int = 42) -> str:
     return tekst if len(tekst) <= limit else tekst[: limit - 1] + "…"
+
+
+def _tytul_okna() -> str:
+    """„Papuga – offline transcription”: nazwa z hasłem w języku okna."""
+    return f"{APP_NAME} – {t(WYDANIE.haslo)}" if WYDANIE.haslo else APP_NAME
 
 
 # ---------------------------------------------------------------------------
@@ -127,6 +133,7 @@ class App:
     ):
         self.root = root
         self.settings = Settings.load()
+        teksty.ustaw_z_ustawien(self.settings.jezyk)
         self.files: List[Path] = []
         self.durations = {}
         self.events: "queue.Queue[tuple]" = queue.Queue()
@@ -150,14 +157,14 @@ class App:
             if splash is not None:
                 splash.status(tekst)
 
-        krok("Wykrywam sprzęt…")
+        krok(t("Wykrywam sprzęt…"))
         self.hw = probe.probe()
         self.rec = probe.recommend(self.hw)
 
-        krok("Sprawdzam kartę graficzną…")
+        krok(t("Sprawdzam kartę graficzną…"))
         self._gpu_gotowe = doctor.cuda_usable()
 
-        krok("Buduję interfejs…")
+        krok(t("Buduję interfejs…"))
         self._build_ui()
         self._apply_settings()
         self._pump_events()
@@ -188,7 +195,7 @@ class App:
 
     def _build_ui(self) -> None:
         r = self.root
-        r.title(APP_FULL_NAME)
+        r.title(_tytul_okna())
         r.configure(bg=BG)
         r.minsize(980, 660)
         if self.settings.window_geometry:
@@ -247,7 +254,7 @@ class App:
         ttk.Label(marka, text=APP_NAME, style="Title.TLabel").grid(
             row=0, column=1, sticky="sw")
         ttk.Label(
-            marka, text=WYDANIE.haslo or "transkrypcja audio i wideo",
+            marka, text=t(WYDANIE.haslo or "transkrypcja audio i wideo"),
             style="Subtitle.TLabel",
         ).grid(row=1, column=1, sticky="nw")
 
@@ -257,9 +264,10 @@ class App:
         if gpu and self._gpu_gotowe:
             badge, kropka, napis = gpu.name, OK_COLOR, FG_DIM
         elif gpu:
-            badge, kropka, napis = f"{gpu.name}: nieaktywna, liczy procesor", WARN_COLOR, WARN_COLOR
+            badge = t("{gpu}: nieaktywna, liczy procesor").format(gpu=gpu.name)
+            kropka, napis = WARN_COLOR, WARN_COLOR
         else:
-            badge, kropka, napis = "Procesor, brak karty NVIDIA", WARN_COLOR, WARN_COLOR
+            badge, kropka, napis = t("Procesor, brak karty NVIDIA"), WARN_COLOR, WARN_COLOR
         prawy_gorny = tk.Frame(head, bg=BG)
         prawy_gorny.grid(row=0, column=2, sticky="e")
         tk.Label(prawy_gorny, text="●", bg=BG, fg=kropka,
@@ -274,18 +282,78 @@ class App:
         # a w trakcie pracy pasek z piór.
         podpis = tk.Frame(head, bg=BG)
         podpis.grid(row=1, column=2, sticky="e", pady=(6, 0))
-        self._link(podpis, "Jak to działa?", self.pokaz_pomoc).pack(side="left")
+        # Pigułka z drugim językiem („EN” w polskim oknie, „PL” w angielskim)
+        # stoi obok „Jak to działa?” — cicho, w tym samym rzędzie odnośników.
+        self._pigulka_jezyka(podpis).pack(side="left", padx=(0, 14))
+        self._link(podpis, t("Jak to działa?"), self.pokaz_pomoc).pack(side="left")
         if WYDANIE.wsparcie_url:
             self._przycisk_kawy(podpis).pack(side="left", padx=(16, 0))
         # Wydanie z podpisem autora w stopce pokazuje tu sam numer wersji —
         # nazwisko ma stać w jednym miejscu, nie w dwóch.
         ttk.Label(
             podpis,
-            text=(f"wersja {__version__}" if WYDANIE.autor
-                  else f"{WYDANIE.wydawca}, wersja {__version__}"),
+            text=(t("wersja {w}").format(w=__version__) if WYDANIE.autor
+                  else t("{wydawca}, wersja {w}").format(wydawca=WYDANIE.wydawca, w=__version__)),
             style="Dim.TLabel",
         ).pack(side="left", padx=(16, 0))
 
+
+    def _pigulka_jezyka(self, parent) -> tk.Canvas:
+        """Mała pigułka „EN” (w polskim oknie) albo „PL” (w angielskim).
+
+        Klik zapisuje język w ustawieniach i uruchamia program ponownie —
+        okno jest zbudowane z napisami na stałe (wzór: Nutka).
+        """
+        napis = teksty.drugi_jezyk().upper()
+        szer, wys = 34, 20
+        c = tk.Canvas(parent, width=szer, height=wys, bg=BG, highlightthickness=0,
+                      cursor="hand2")
+
+        def rysuj(nad: bool = False) -> None:
+            c.delete("all")
+            theme.zaokraglony(c, 1, 1, szer - 1, wys - 1, 9, fill=BG_INPUT,
+                              outline=ACCENT if nad else BORDER_DROP)
+            c.create_text(szer // 2, wys // 2, text=napis, fill=FG if nad else FG_DIM,
+                          font=(theme.FONT_SEMI, 8))
+
+        rysuj()
+        c.bind("<Enter>", lambda _e: rysuj(True))
+        c.bind("<Leave>", lambda _e: rysuj(False))
+        c.bind("<Button-1>", lambda _e: self._zmien_jezyk())
+        return c
+
+    def _zmien_jezyk(self) -> None:
+        """Przełącznik PL/EN: zapis w ustawieniach i ponowne uruchomienie."""
+        if self._nagrywa() or self._busy():
+            if not messagebox.askyesno(
+                APP_TITLE, t("Program jeszcze pracuje. Przerwać pracę i zmienić język teraz?"),
+                parent=self.root,
+            ):
+                return
+            if self._nagrywa():
+                self.nagrywarka.stop()
+                self.nagrywarka.czekaj(15)
+            if self._busy():
+                self.cancel_flag.set()
+        self.settings.jezyk = teksty.drugi_jezyk()
+        self.settings.save()
+        # Nowy proces ma wziąć język z ustawień, nie ze zmiennej testowej.
+        srodowisko = {k: v for k, v in os.environ.items() if k != teksty.ZMIENNA}
+        polecenie = [sys.executable] if is_frozen() else [sys.executable, "-m", "whisper_automat"]
+        flagi = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                 if os.name == "nt" else 0)
+        try:
+            # Wersja okienkowa nie ma prawidłowych strumieni — bez przekierowania
+            # Popen przewraca się na „uchwyt jest nieprawidłowy”.
+            subprocess.Popen(
+                polecenie, env=srodowisko, cwd=str(project_root()), close_fds=True,
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=flagi,
+            )
+        except OSError as exc:
+            self.log(t("Nie udało się uruchomić programu ponownie: {blad}").format(blad=exc))
+            return
+        self._zamknij()
 
     def _przycisk_kawy(self, parent) -> tk.Label:
         """Odnośnik wsparcia: żółta filiżanka i napis, bez wypełnienia.
@@ -295,7 +363,7 @@ class App:
         z przyciskiem Transkrybuj oraz z paskiem postępu.
         """
         przycisk = tk.Label(
-            parent, text="Postaw kawę autorowi", bg=BG, fg=theme.KAWA,
+            parent, text=t("Postaw kawę autorowi"), bg=BG, fg=theme.KAWA,
             cursor="hand2", font=(theme.FONT, 9),
         )
         plik = asset("ui/kawa-zolta.png")
@@ -339,15 +407,15 @@ class App:
 
         Wszystko poza diagnostyką i licencjami tylko wtedy, gdy wydanie to ma.
         """
-        linki = [("Diagnostyka", self.show_diagnosis)]
+        linki = [(t("Diagnostyka"), self.show_diagnosis)]
         if WYDANIE.aktualizacje:
-            linki.append(("Sprawdź aktualizacje", self.sprawdz_aktualizacje))
+            linki.append((t("Sprawdź aktualizacje"), self.sprawdz_aktualizacje))
         if WYDANIE.zgloszenia_url:
-            linki.append(("Zgłoś problem", lambda: webbrowser.open(WYDANIE.zgloszenia_url)))
+            linki.append((t("Zgłoś problem"), lambda: webbrowser.open(WYDANIE.zgloszenia_url)))
         if WYDANIE.kontakt_email:
-            linki.append(("Kontakt", lambda: webbrowser.open(
+            linki.append((t("Kontakt"), lambda: webbrowser.open(
                 f"mailto:{WYDANIE.kontakt_email}?subject={APP_TITLE}%20{__version__}")))
-        linki.append(("Licencje", self.pokaz_licencje))
+        linki.append((t("Licencje"), self.pokaz_licencje))
         if not linki:
             return
 
@@ -375,10 +443,10 @@ class App:
         rzad = tk.Frame(self.baner, bg=BANER_BG)
         rzad.grid(row=1, column=0, sticky="w", pady=(8, 0))
         przyciski = [
-            ("Zaktualizuj teraz", self.zaktualizuj),
-            ("Co nowego", self.co_nowego),
-            ("Pomiń tę wersję", self.pomin_wersje),
-            ("Później", self._ukryj_baner),
+            (t("Zaktualizuj teraz"), self.zaktualizuj),
+            (t("Co nowego"), self.co_nowego),
+            (t("Pomiń tę wersję"), self.pomin_wersje),
+            (t("Później"), self._ukryj_baner),
         ]
         for i, (tekst, akcja) in enumerate(przyciski):
             ttk.Button(rzad, text=tekst, command=akcja,
@@ -420,10 +488,10 @@ class App:
                           fill=BG_DROP_HOVER if nad else BG_DROP,
                           outline=ACCENT if nad else BORDER_DROP, dash=(6, 4))
 
-        glowny = ("Przeciągnij tutaj nagrania lub folder" if DND_AVAILABLE
-                  else "Kliknij, aby wybrać nagrania")
-        dodatek = ("albo kliknij i wybierz z dysku: audio lub wideo"
-                   if DND_AVAILABLE else "audio lub wideo")
+        glowny = (t("Przeciągnij tutaj nagrania lub folder") if DND_AVAILABLE
+                  else t("Kliknij, aby wybrać nagrania"))
+        dodatek = (t("albo kliknij i wybierz z dysku: audio lub wideo")
+                   if DND_AVAILABLE else t("audio lub wideo"))
         if self._drop_duzy:
             self._rysuj_drop_duzy(c, szer, wys, nad, glowny, dodatek)
             return
@@ -455,7 +523,7 @@ class App:
         c.create_text(x, y + ikona // 2 + 58, text=dodatek,
                       font=(theme.FONT, 10), fill=FG_DIM)
         c.create_text(x, y + ikona // 2 + 90,
-                      text="MP4, MKV, MOV, MP3, WAV, M4A i inne. Wiele plików naraz.",
+                      text=t("MP4, MKV, MOV, MP3, WAV, M4A i inne. Wiele plików naraz."),
                       font=(theme.FONT, 9), fill=FG_FAINT)
 
     def _drop_color(self, color: str) -> None:
@@ -486,7 +554,7 @@ class App:
         wnetrze.grid(row=0, column=0, sticky="ew")
         wnetrze.columnconfigure(3, weight=1)
 
-        self.rec_btn = ttk.Button(wnetrze, text="Nagrywaj spotkanie",
+        self.rec_btn = ttk.Button(wnetrze, text=t("Nagrywaj spotkanie"),
                                   command=self.przelacz_nagrywanie)
         self.rec_btn.grid(row=0, column=0, rowspan=2, sticky="w")
 
@@ -502,8 +570,8 @@ class App:
 
         # Dwa cienkie wskaźniki poziomu: mikrofon i dźwięk spotkania.
         self.rec_paski = {}
-        for i, (klucz, tekst) in enumerate((("mikrofon", "Mikrofon"),
-                                            ("system", "Dźwięk spotkania"))):
+        for i, (klucz, tekst) in enumerate((("mikrofon", t("Mikrofon")),
+                                            ("system", t("Dźwięk spotkania")))):
             tk.Label(wnetrze, text=tekst, bg=BG_CARD, fg=FG_DIM, font=(theme.FONT, 9),
                      anchor="w", width=15).grid(row=i, column=2, sticky="w", padx=(10, 8))
             pasek = theme.PasekPostepu(wnetrze, maximum=1000, grubosc=4, podloze=BG_CARD)
@@ -516,7 +584,7 @@ class App:
         self.rec_zrodla = tk.Label(zrodla, text="", bg=BG_CARD, fg=FG_FAINT,
                                    font=(theme.FONT, 9), anchor="w")
         self.rec_zrodla.pack(side="left")
-        self._link(zrodla, "Zmień…", self.wybierz_urzadzenia, tlo=BG_CARD).pack(
+        self._link(zrodla, t("Zmień…"), self.wybierz_urzadzenia, tlo=BG_CARD).pack(
             side="left", padx=(8, 0))
         self._odswiez_zrodla()
 
@@ -526,10 +594,11 @@ class App:
 
     def _odswiez_zrodla(self) -> None:
         s = self.settings
-        mik = s.nagranie_mikrofon or "domyślny"
-        system = s.nagranie_glosniki or "domyślne urządzenie odtwarzania"
+        mik = s.nagranie_mikrofon or t("domyślny")
+        system = s.nagranie_glosniki or t("domyślne urządzenie odtwarzania")
         self.rec_zrodla.configure(
-            text=f"Mikrofon: {_skroc(mik)}  ·  Dźwięk spotkania z: {_skroc(system)}")
+            text=t("Mikrofon: {mik}  ·  Dźwięk spotkania z: {system}").format(
+                mik=_skroc(mik), system=_skroc(system)))
 
     def przelacz_nagrywanie(self) -> None:
         if self._nagrywa():
@@ -563,23 +632,23 @@ class App:
         self._nagranie_sys_cicho_od = None
         self._nagranie_podpowiedziano = False
         self._ustaw_stan_nagrywania(True)
-        self.log(f"Nagrywam spotkanie: {plik.name}")
-        self.status_var.set("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane.")
+        self.log(t("Nagrywam spotkanie: {plik}").format(plik=plik.name))
+        self.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
 
     def zatrzymaj_nagrywanie(self) -> None:
-        self.rec_btn.configure(state="disabled", text="Zapisuję…")
-        self.status_var.set("Kończę nagranie…")
+        self.rec_btn.configure(state="disabled", text=t("Zapisuję…"))
+        self.status_var.set(t("Kończę nagranie…"))
         self.nagrywarka.stop()
 
     def _ustaw_stan_nagrywania(self, nagrywa: bool) -> None:
         if nagrywa:
-            self.rec_btn.configure(text="Zatrzymaj nagranie", style="Stop.TButton",
+            self.rec_btn.configure(text=t("Zatrzymaj nagranie"), style="Stop.TButton",
                                    state="normal")
             self.rec_czas.configure(fg=FG)
             self.start_btn.configure(state="disabled")
             self._migaj_kropka()
         else:
-            self.rec_btn.configure(text="Nagrywaj spotkanie", style="TButton", state="normal")
+            self.rec_btn.configure(text=t("Nagrywaj spotkanie"), style="TButton", state="normal")
             self.rec_czas.configure(text="0:00:00", fg=FG_DIM)
             self.rec_kropka.configure(fg=BG_CARD)
             for pasek in self.rec_paski.values():
@@ -608,41 +677,44 @@ class App:
         elif (not self._nagranie_podpowiedziano and mik > -50.0
               and teraz - self._nagranie_sys_cicho_od > 30.0):
             self._nagranie_podpowiedziano = True
-            tekst = ("Nie słychać dźwięku spotkania. Sprawdź, na jakie urządzenie gra "
-                     "Teams, i wskaż je w „Zmień…”.")
+            tekst = t("Nie słychać dźwięku spotkania. Sprawdź, na jakie urządzenie gra "
+                      "Teams, i wskaż je w „Zmień…”.")
             self.status_var.set(tekst)
-            self.log(f"UWAGA (nagrywanie): {tekst}")
+            self.log(t("UWAGA (nagrywanie): {tekst}").format(tekst=tekst))
 
     def _po_nagraniu(self, plik: Path, sekundy: float) -> None:
         self._ustaw_stan_nagrywania(False)
         self._nagranie_plik = None
         opis = media.format_duration(sekundy)
-        self.log(f"Nagranie zapisane: {plik.name} ({opis}).")
+        self.log(t("Nagranie zapisane: {plik} ({czas}).").format(plik=plik.name, czas=opis))
         for nazwa, st in self.nagrywarka.statystyki.items():
             if st["luki"] or st["korekty"] or st["odrzucone"] or st["wyprzedzenia"]:
-                self.log(f"  {nazwa}: luki {st['luki']}, korekty dryfu {st['korekty']}, "
-                         f"odrzucone próbki {st['odrzucone']}, wyprzedzenia {st['wyprzedzenia']}")
+                self.log(t("  {tor}: luki {luki}, korekty dryfu {korekty}, "
+                           "odrzucone próbki {odrzucone}, wyprzedzenia {wyprzedzenia}").format(
+                    tor=nazwa, luki=st["luki"], korekty=st["korekty"],
+                    odrzucone=st["odrzucone"], wyprzedzenia=st["wyprzedzenia"]))
         self.add_files([plik])
         if not self.settings.nagranie_transkrybuj:
-            self.status_var.set(f"Nagranie zapisane ({opis}). Czeka w kolejce.")
+            self.status_var.set(t("Nagranie zapisane ({czas}). Czeka w kolejce.").format(czas=opis))
         elif self._busy():
             self._po_pracy_transkrybuj = True
-            self.status_var.set(f"Nagranie zapisane ({opis}). Transkrypcja ruszy po bieżącej pracy.")
+            self.status_var.set(t("Nagranie zapisane ({czas}). Transkrypcja ruszy po bieżącej pracy.")
+                                .format(czas=opis))
         else:
-            self.status_var.set(f"Nagranie zapisane ({opis}). Zaczynam transkrypcję…")
+            self.status_var.set(t("Nagranie zapisane ({czas}). Zaczynam transkrypcję…").format(czas=opis))
             self.root.after(300, lambda: self.start(tylko_nowe=True))
 
     def wybierz_urzadzenia(self) -> None:
         """Małe okno: mikrofon i urządzenie, z którego bierzemy dźwięk spotkania."""
         if self._nagrywa():
-            messagebox.showinfo(APP_TITLE, "Źródła zmienisz po zatrzymaniu nagrania.",
+            messagebox.showinfo(APP_TITLE, t("Źródła zmienisz po zatrzymaniu nagrania."),
                                 parent=self.root)
             return
         if self._okno_urzadzen is not None and self._okno_urzadzen[0].winfo_exists():
             self._okno_urzadzen[0].lift()
             return
         okno = tk.Toplevel(self.root)
-        okno.title("Źródła nagrania")
+        okno.title(t("Źródła nagrania"))
         okno.configure(bg=BG)
         okno.resizable(False, False)
         okno.transient(self.root)
@@ -650,29 +722,30 @@ class App:
         tresc.pack(fill="both", expand=True)
         tresc.columnconfigure(0, weight=1)
 
-        DOMYSLNE = "Domyślne (ustawienie Windows)"
+        DOMYSLNE = t("Domyślne (ustawienie Windows)")
+        WCZYTUJE = t("Wczytuję listę urządzeń…")
         pola = {}
-        opisy = (("mikrofon", "Mikrofon"),
-                 ("glosniki", "Dźwięk spotkania z urządzenia (tego, na którym gra Teams)"))
+        opisy = (("mikrofon", t("Mikrofon")),
+                 ("glosniki", t("Dźwięk spotkania z urządzenia (tego, na którym gra Teams)")))
         for i, (klucz, tekst) in enumerate(opisy):
             tk.Label(tresc, text=tekst, bg=BG, fg=FG_DIM, font=(theme.FONT, 9),
                      anchor="w").grid(row=2 * i, column=0, sticky="w",
                                       pady=((0 if i == 0 else 12), 2))
-            var = tk.StringVar(value="Wczytuję listę urządzeń…")
+            var = tk.StringVar(value=WCZYTUJE)
             box = ttk.Combobox(tresc, textvariable=var, state="readonly", width=56)
             box.grid(row=2 * i + 1, column=0, sticky="ew")
             pola[klucz] = (var, box)
         tk.Label(
             tresc, bg=BG, fg=FG_FAINT, font=(theme.FONT, 9), justify="left",
             wraplength=440, anchor="w",
-            text="Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
-                 "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania.",
+            text=t("Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
+                   "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania."),
         ).grid(row=4, column=0, sticky="w", pady=(14, 0))
 
         def zapisz() -> None:
             for klucz, (var, _box) in pola.items():
                 wybor = var.get()
-                if wybor == DOMYSLNE or wybor.startswith("Wczytuję") or not wybor:
+                if wybor in (DOMYSLNE, WCZYTUJE) or wybor.startswith(t("Nie udało się odczytać urządzeń")) or not wybor:
                     wybor = ""
                 setattr(self.settings, f"nagranie_{klucz}", wybor)
             self.settings.save()
@@ -681,8 +754,8 @@ class App:
 
         przyciski = tk.Frame(tresc, bg=BG)
         przyciski.grid(row=5, column=0, sticky="e", pady=(18, 0))
-        ttk.Button(przyciski, text="Anuluj", command=okno.destroy).pack(side="right", padx=(8, 0))
-        ttk.Button(przyciski, text="Zapisz", style="Accent.TButton", command=zapisz).pack(
+        ttk.Button(przyciski, text=t("Anuluj"), command=okno.destroy).pack(side="right", padx=(8, 0))
+        ttk.Button(przyciski, text=t("Zapisz"), style="Accent.TButton", command=zapisz).pack(
             side="right")
         okno.bind("<Escape>", lambda _e: okno.destroy())
         okno.update_idletasks()
@@ -711,7 +784,7 @@ class App:
         _okno, pola, DOMYSLNE = self._okno_urzadzen
         if blad:
             for var, box in pola.values():
-                var.set(f"Nie udało się odczytać urządzeń: {blad[:60]}")
+                var.set(t("Nie udało się odczytać urządzeń") + f": {blad[:60]}")
             return
         for klucz, lista, zapisane in (("mikrofon", wejscia, self.settings.nagranie_mikrofon),
                                        ("glosniki", wyjscia, self.settings.nagranie_glosniki)):
@@ -728,14 +801,14 @@ class App:
         if not pliki:
             return
         opis = "\n".join(f"•  {p.name}" for p in pliki)
-        pytanie = (f"Poprzednie nagrywanie nie zostało poprawnie zakończone:\n\n{opis}\n\n"
-                   f"Odzyskać nagranie i dodać je do kolejki?")
+        pytanie = t("Poprzednie nagrywanie nie zostało poprawnie zakończone:\n\n{pliki}\n\n"
+                    "Odzyskać nagranie i dodać je do kolejki?").format(pliki=opis)
         if not messagebox.askyesno(APP_TITLE, pytanie, parent=self.root):
             for p in pliki:
                 nagrywanie.usun_znacznik(p)
-            self.log("Niedokończone nagranie zostaje w folderze Nagrania bez zmian.")
+            self.log(t("Niedokończone nagranie zostaje w folderze Nagrania bez zmian."))
             return
-        self.status_var.set("Odzyskuję nagranie…")
+        self.status_var.set(t("Odzyskuję nagranie…"))
 
         def praca() -> None:
             for p in pliki:
@@ -749,11 +822,11 @@ class App:
 
     def _po_odzyskaniu(self, sciezka: str, blad: str) -> None:
         if blad:
-            self.log(f"Nie udało się odzyskać {Path(sciezka).name}: {blad}")
-            self.status_var.set("Odzyskanie nagrania nie powiodło się.")
+            self.log(t("Nie udało się odzyskać {plik}: {blad}").format(plik=Path(sciezka).name, blad=blad))
+            self.status_var.set(t("Odzyskanie nagrania nie powiodło się."))
             return
-        self.log(f"Odzyskano niedokończone nagranie: {Path(sciezka).name}")
-        self.status_var.set("Odzyskane nagranie czeka w kolejce.")
+        self.log(t("Odzyskano niedokończone nagranie: {plik}").format(plik=Path(sciezka).name))
+        self.status_var.set(t("Odzyskane nagranie czeka w kolejce."))
         self.add_files([Path(sciezka)])
 
     def _build_queue(self, parent) -> None:
@@ -765,22 +838,22 @@ class App:
         bar = ttk.Frame(wrap, style="Card.TFrame", padding=(16, 12, 10, 6))
         bar.grid(row=0, column=0, columnspan=2, sticky="ew")
         bar.columnconfigure(1, weight=1)
-        ttk.Label(bar, text="Kolejka", style="Card.Heading.TLabel").grid(
+        ttk.Label(bar, text=t("Kolejka"), style="Card.Heading.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         self.podsumowanie = ttk.Label(bar, text="", style="Card.Dim.TLabel")
         self.podsumowanie.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=(2, 0))
-        ttk.Button(bar, text="Usuń zaznaczone", style="Ghost.TButton",
+        ttk.Button(bar, text=t("Usuń zaznaczone"), style="Ghost.TButton",
                    command=self.remove_selected).grid(row=0, column=2, padx=(6, 0))
-        ttk.Button(bar, text="Wyczyść", style="Ghost.TButton",
+        ttk.Button(bar, text=t("Wyczyść"), style="Ghost.TButton",
                    command=self.clear_queue).grid(row=0, column=3, padx=(2, 0))
 
         self.tree = ttk.Treeview(
             wrap, columns=("dlugosc", "status", "usun"), show="tree headings", height=8
         )
-        self.tree.heading("#0", text="Plik", anchor="w")
-        self.tree.heading("dlugosc", text="Długość")
-        self.tree.heading("status", text="Status", anchor="w")
+        self.tree.heading("#0", text=t("Plik"), anchor="w")
+        self.tree.heading("dlugosc", text=t("Długość"))
+        self.tree.heading("status", text=t("Status"), anchor="w")
         # Nazwa pliku zabiera resztę miejsca — szerokość startowa jest mała,
         # żeby krzyżyk na końcu wiersza mieścił się także w wąskim oknie.
         self.tree.column("#0", width=200, minwidth=160, anchor="w")
@@ -796,8 +869,8 @@ class App:
         self._menu = tk.Menu(self.root, tearoff=False, bg=BG_INPUT, fg=FG,
                              activebackground=ACCENT, activeforeground="#ffffff",
                              borderwidth=0, font=(theme.FONT, 10))
-        self._menu.add_command(label="Usuń z kolejki", command=self.remove_selected)
-        self._menu.add_command(label="Wyczyść kolejkę", command=self.clear_queue)
+        self._menu.add_command(label=t("Usuń z kolejki"), command=self.remove_selected)
+        self._menu.add_command(label=t("Wyczyść kolejkę"), command=self.clear_queue)
         self.tree.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=(0, 8))
 
         # Gotowe pliki cichną — uwaga zostaje przy tych, które jeszcze czekają.
@@ -843,7 +916,7 @@ class App:
         tekst = _liczba_plikow(n)
         dlugosci = [self.durations[str(f)] for f in self.files if str(f) in self.durations]
         if dlugosci:
-            tekst += f", łącznie {media.format_duration(sum(dlugosci))}"
+            tekst += t(", łącznie {czas}").format(czas=media.format_duration(sum(dlugosci)))
         self.podsumowanie.configure(text=tekst)
 
     def _build_settings(self, parent) -> None:
@@ -859,70 +932,64 @@ class App:
             ttk.Label(panel, text=tekst, style="Card.Section.TLabel").grid(
                 row=wiersz, column=0, sticky="w", pady=(16, 5))
 
-        ttk.Label(panel, text="Ustawienia", style="Card.Heading.TLabel").grid(
+        ttk.Label(panel, text=t("Ustawienia"), style="Card.Heading.TLabel").grid(
             row=0, column=0, sticky="w", pady=(0, 8))
 
         # Modelu nie wybiera się w oknie: program dobiera go sam do sprzętu,
         # a na każdym rozsądnym komputerze jest to large-v3-turbo — mniejsze
         # na procesorze nie są szybsze, a gubią słowa (pomiary w PROGRESS.md).
         # Inny model można wymusić w trybie konsolowym: --model.
-        ttk.Label(panel, text="Język nagrania", style="Card.Dim.TLabel").grid(
+        ttk.Label(panel, text=t("Język nagrania"), style="Card.Dim.TLabel").grid(
             row=3, column=0, sticky="w")
         self.lang_var = tk.StringVar()
+        # Lista pokazuje napisy w języku okna, logika porównuje kody (config).
         self.lang_box = ttk.Combobox(
             panel, textvariable=self.lang_var,
-            values=[label for _c, label in LANGUAGES], state="readonly",
+            values=[t(label) for _c, label in LANGUAGES], state="readonly",
         )
-        self.lang_box.grid(row=4, column=0, sticky="ew", pady=(2, 6))
-
-        ttk.Label(panel, text="Kontekst (nazwy, skróty, terminy)",
-                  style="Card.Dim.TLabel").grid(row=5, column=0, sticky="w")
-        self.prompt_var = tk.StringVar()
-        theme.pole(panel, self.prompt_var,
-                   podpowiedz="np. Kowalski, KSeF, Allegro").grid(
-            row=6, column=0, sticky="ew", ipady=5, pady=(2, 0))
+        self.lang_box.grid(row=4, column=0, sticky="ew", pady=(2, 0))
 
         # Formaty.
-        sekcja(7, "Zapisz jako")
+        sekcja(7, t("Zapisz jako"))
         fmt = ttk.Frame(panel, style="Card.TFrame")
         fmt.grid(row=8, column=0, sticky="ew")
         self.format_vars = {}
         for i, nazwa in enumerate(FORMATS):
             var = tk.BooleanVar(value=nazwa in self.settings.formats)
             self.format_vars[nazwa] = var
-            ttk.Checkbutton(fmt, text=FORMAT_LABELS[nazwa], variable=var,
+            ttk.Checkbutton(fmt, text=t(FORMAT_LABELS[nazwa]), variable=var,
                             style="Card.TCheckbutton").grid(
                 row=i, column=0, sticky="w")
 
         # Miejsce zapisu.
-        sekcja(9, "Folder wyników")
+        sekcja(9, t("Folder wyników"))
         out_row = ttk.Frame(panel, style="Card.TFrame")
         out_row.grid(row=10, column=0, sticky="ew")
         out_row.columnconfigure(0, weight=1)
         self.outdir_var = tk.StringVar()
         self.outdir_entry = theme.pole(out_row, self.outdir_var)
         self.outdir_entry.grid(row=0, column=0, sticky="ew", ipady=5, padx=(0, 6))
-        ttk.Button(out_row, text="Zmień…", command=self.choose_output).grid(
+        ttk.Button(out_row, text=t("Zmień…"), command=self.choose_output).grid(
             row=0, column=1)
 
         self.next_to_source = tk.BooleanVar()
         ttk.Checkbutton(
-            panel, text="Zapisuj obok pliku źródłowego", variable=self.next_to_source,
+            panel, text=t("Zapisuj obok pliku źródłowego"), variable=self.next_to_source,
             command=self._toggle_outdir, style="Card.TCheckbutton",
         ).grid(row=11, column=0, sticky="w", pady=(6, 0))
 
         # Rozpoznawanie mówców.
-        sekcja(12, "Mówcy")
+        sekcja(12, t("Mówcy"))
         mowcy = ttk.Frame(panel, style="Card.TFrame")
         mowcy.grid(row=13, column=0, sticky="ew")
         mowcy.columnconfigure(0, weight=1)
         self.diarize_var = tk.BooleanVar()
         ttk.Checkbutton(
-            mowcy, text="Rozpoznaj, kto co powiedział", variable=self.diarize_var,
+            mowcy, text=t("Rozpoznaj, kto co powiedział"), variable=self.diarize_var,
             command=self._toggle_diarize, style="Card.TCheckbutton",
         ).grid(row=0, column=0, sticky="w")
 
-        ttk.Label(mowcy, text="Ile osób:", style="Card.TLabel").grid(
+        ttk.Label(mowcy, text=t("Ile osób:"), style="Card.TLabel").grid(
             row=0, column=1, padx=(8, 6))
         self.speakers_var = tk.StringVar(value="2")
         # Pole jest edytowalne. Stan "readonly" zostawiał działające tylko
@@ -945,10 +1012,10 @@ class App:
         # Nagrywanie spotkań: urządzenia wybiera się w karcie nagrywania
         # („Zmień…”), tu zostaje tylko to, co dzieje się po zatrzymaniu.
         if WYDANIE.nagrywanie:
-            sekcja(15, "Nagrywanie")
+            sekcja(15, t("Nagrywanie"))
             self.rec_auto_var = tk.BooleanVar(value=True)
             ttk.Checkbutton(
-                panel, text="Transkrybuj od razu po zatrzymaniu",
+                panel, text=t("Transkrybuj od razu po zatrzymaniu"),
                 variable=self.rec_auto_var, style="Card.TCheckbutton",
             ).grid(row=16, column=0, sticky="w")
 
@@ -962,7 +1029,7 @@ class App:
         postep.grid(row=0, column=0, sticky="ew", padx=(0, 20))
         postep.columnconfigure(0, weight=1)
 
-        self.status_var = tk.StringVar(value="Gotowy.")
+        self.status_var = tk.StringVar(value=t("Gotowy."))
         ttk.Label(postep, textvariable=self.status_var, style="Status.TLabel").grid(
             row=0, column=0, sticky="w")
         self.overall_var = tk.StringVar(value="")
@@ -979,14 +1046,14 @@ class App:
 
         przyciski = ttk.Frame(row, style="App.TFrame")
         przyciski.grid(row=0, column=1, sticky="e")
-        ttk.Button(przyciski, text="Otwórz wyniki", command=self.open_output).grid(
+        ttk.Button(przyciski, text=t("Otwórz wyniki"), command=self.open_output).grid(
             row=0, column=0, padx=(0, 8))
         self.cancel_btn = ttk.Button(
-            przyciski, text="Przerwij", command=self.cancel, state="disabled"
+            przyciski, text=t("Przerwij"), command=self.cancel, state="disabled"
         )
         self.cancel_btn.grid(row=0, column=1, padx=(0, 8))
         self.start_btn = ttk.Button(
-            przyciski, text="Transkrybuj", style="Accent.TButton", command=self.start
+            przyciski, text=t("Transkrybuj"), style="Accent.TButton", command=self.start
         )
         self.start_btn.grid(row=0, column=2)
 
@@ -995,7 +1062,7 @@ class App:
         stopka.grid(row=3, column=0, sticky="ew", pady=(12, 0))
         stopka.columnconfigure(1, weight=1)
 
-        self._przelacznik = self._link(stopka, "▸  Pokaż dziennik", self._przelacz_dziennik)
+        self._przelacznik = self._link(stopka, t("▸  Pokaż dziennik"), self._przelacz_dziennik)
         self._przelacznik.grid(row=0, column=0, sticky="w")
         self._build_links(stopka)
 
@@ -1021,11 +1088,11 @@ class App:
         if self._dziennik_widoczny:
             self._dziennik.grid(row=W_DZIENNIK, column=0, sticky="nsew", pady=(12, 0),
                                 padx=(0, 14))
-            self._przelacznik.configure(text="▾  Ukryj dziennik")
+            self._przelacznik.configure(text=t("▾  Ukryj dziennik"))
             self.log_text.see("end")
         else:
             self._dziennik.grid_remove()
-            self._przelacznik.configure(text="▸  Pokaż dziennik")
+            self._przelacznik.configure(text=t("▸  Pokaż dziennik"))
 
     # -- ustawienia <-> widżety --------------------------------------------
 
@@ -1036,9 +1103,8 @@ class App:
         s.model = s.device = s.compute_type = ""
 
         self.lang_var.set(
-            dict(LANGUAGES).get(s.language, "polski")
+            t(dict(LANGUAGES).get(s.language, "polski"))
         )
-        self.prompt_var.set(s.initial_prompt)
         self.next_to_source.set(s.output_next_to_source)
         self.diarize_var.set(s.diarize)
         self.speakers_var.set(str(s.speakers))
@@ -1049,16 +1115,16 @@ class App:
         self._toggle_outdir()
         self._toggle_diarize()
 
-        self.log(f"{APP_TITLE} — gotowy.")
-        self.log(f"Rekomendacja sprzętowa: {self.rec.model} "
-                 f"({self.rec.device}, {self.rec.compute_type})")
+        self.log(t("{app} — gotowy.").format(app=APP_TITLE))
+        self.log(t("Rekomendacja sprzętowa: {model} ({urzadzenie}, {precyzja})").format(
+            model=self.rec.model, urzadzenie=self.rec.device, precyzja=self.rec.compute_type))
         for warning in self.rec.warnings:
-            self.log(f"UWAGA: {warning}")
+            self.log(t("UWAGA: {tekst}").format(tekst=warning))
         if not DND_AVAILABLE:
-            self.log(
+            self.log(t(
                 "Brak tkinterdnd2 — przeciąganie plików wyłączone, "
                 "użyj kliknięcia w pole powyżej."
-            )
+            ))
 
     def _collect_settings(self) -> Settings:
         s = self.settings
@@ -1066,11 +1132,10 @@ class App:
 
         chosen_lang = self.lang_var.get()
         for code, text in LANGUAGES:
-            if text == chosen_lang:
+            if t(text) == chosen_lang:
                 s.language = code
                 break
 
-        s.initial_prompt = self.prompt_var.get().strip()
         s.formats = [f for f, var in self.format_vars.items() if var.get()]
         s.output_next_to_source = bool(self.next_to_source.get())
         s.diarize = bool(self.diarize_var.get())
@@ -1095,8 +1160,8 @@ class App:
         self.speakers_box.configure(state="normal" if wlaczone else "disabled")
         if wlaczone:
             self.diarize_hint.configure(
-                text="Wydłuża pracę mniej więcej o długość nagrania. Dokładna "
-                     "liczba osób dzieli wyraźnie lepiej niż 0 („zgadnij”).",
+                text=t("Wydłuża pracę mniej więcej o długość nagrania. Dokładna "
+                       "liczba osób dzieli wyraźnie lepiej niż 0 („zgadnij”)."),
             )
         else:
             self.diarize_hint.configure(text="")
@@ -1125,10 +1190,10 @@ class App:
             return
         patterns = " ".join(f"*{e}" for e in sorted(media.MEDIA_EXT))
         paths = filedialog.askopenfilenames(
-            title="Wybierz pliki audio lub wideo",
+            title=t("Wybierz pliki audio lub wideo"),
             filetypes=[
-                ("Pliki audio i wideo", patterns),
-                ("Wszystkie pliki", "*.*"),
+                (t("Pliki audio i wideo"), patterns),
+                (t("Wszystkie pliki"), "*.*"),
             ],
         )
         if paths:
@@ -1137,7 +1202,7 @@ class App:
     def add_files(self, paths) -> None:
         found = media.collect_media(paths)
         if not found:
-            self.log("Przeciągnięte pliki nie zawierają obsługiwanych formatów.")
+            self.log(t("Przeciągnięte pliki nie zawierają obsługiwanych formatów."))
             return
 
         added = 0
@@ -1147,12 +1212,12 @@ class App:
                 continue
             self.files.append(path)
             self.tree.insert("", "end", iid=str(path), text=path.name,
-                             values=("…", "oczekuje", USUN))
+                             values=("…", t("oczekuje"), USUN))
             added += 1
 
         self._odswiez_pusta_kolejke()
         if added:
-            self.log(f"Dodano {added} plik(ów) do kolejki.")
+            self.log(t("Dodano {n} plik(ów) do kolejki.").format(n=added))
             threading.Thread(target=self._probe_durations, daemon=True).start()
 
     def _probe_durations(self) -> None:
@@ -1165,7 +1230,7 @@ class App:
                 self.durations[str(path)] = info.duration
             except Exception as exc:
                 text = "—"
-                self.events.put(("row_error", str(path), f"nieczytelny: {exc}"))
+                self.events.put(("row_error", str(path), t("nieczytelny: {blad}").format(blad=exc)))
                 continue
             self.events.put(("row_duration", str(path), text))
 
@@ -1228,20 +1293,20 @@ class App:
             return
         if self._nagrywa():
             messagebox.showinfo(
-                APP_TITLE, "Trwa nagrywanie — transkrypcja ruszy po jego zatrzymaniu.",
+                APP_TITLE, t("Trwa nagrywanie — transkrypcja ruszy po jego zatrzymaniu."),
                 parent=self.root,
             )
             return
         if not self.files:
             messagebox.showinfo(
-                APP_TITLE, "Najpierw dodaj pliki — przeciągnij je w pole u góry."
+                APP_TITLE, t("Najpierw dodaj pliki — przeciągnij je w pole u góry.")
             )
             return
 
         settings = self._collect_settings()
         if not settings.formats:
             messagebox.showwarning(
-                APP_TITLE, "Zaznacz przynajmniej jeden format zapisu."
+                APP_TITLE, t("Zaznacz przynajmniej jeden format zapisu.")
             )
             return
         settings.save()
@@ -1259,13 +1324,13 @@ class App:
                 return
         elif gotowe:
             if len(gotowe) == len(files):
-                pytanie = ("Wszystkie pliki w kolejce są już przetworzone. Przetworzyć je "
-                           "jeszcze raz?\n\nNowe pliki wyników dostaną numer w nazwie, "
-                           "stare zostaną.")
+                pytanie = t("Wszystkie pliki w kolejce są już przetworzone. Przetworzyć je "
+                            "jeszcze raz?\n\nNowe pliki wyników dostaną numer w nazwie, "
+                            "stare zostaną.")
             else:
-                pytanie = (f"Gotowe pliki w kolejce: {len(gotowe)}. Przetworzyć je jeszcze "
-                           f"raz razem z nowymi?\n\n„Nie” przetworzy tylko te, które "
-                           f"jeszcze czekają.")
+                pytanie = t("Gotowe pliki w kolejce: {n}. Przetworzyć je jeszcze "
+                            "raz razem z nowymi?\n\n„Nie” przetworzy tylko te, które "
+                            "jeszcze czekają.").format(n=len(gotowe))
             if not messagebox.askyesno(APP_TITLE, pytanie, parent=self.root):
                 files = [f for f in files if str(f) not in gotowe]
                 if not files:
@@ -1281,7 +1346,7 @@ class App:
         wybrane = {str(f) for f in files}
         for iid in self.tree.get_children():
             if iid in wybrane:
-                self.tree.item(iid, values=(self.tree.item(iid, "values")[0], "oczekuje", USUN),
+                self.tree.item(iid, values=(self.tree.item(iid, "values")[0], t("oczekuje"), USUN),
                                tags=())
 
         self._w_toku = [str(f) for f in files]
@@ -1310,7 +1375,7 @@ class App:
             results = Runner(settings, callbacks).run(files)
             put(("done", results))
         except Exception as exc:  # ostatnia linia obrony wątku roboczego
-            put(("log", f"BŁĄD KRYTYCZNY: {type(exc).__name__}: {exc}"))
+            put(("log", t("BŁĄD KRYTYCZNY: {blad}").format(blad=f"{type(exc).__name__}: {exc}")))
             put(("done", []))
 
     def _zapytaj_o_mowcow(self, result, audio) -> dict:
@@ -1345,12 +1410,12 @@ class App:
         model = self._model_do_pracy()
         if self._busy() or not model_do_pobrania(model):
             return
-        self.log(
-            f"Pierwsze uruchomienie: pobieram model rozpoznawania mowy {model} "
-            f"(ok. {download.rozmiar_opis(model)}). To jednorazowe — potem "
-            f"program działa bez internetu, a nagrania nigdy nie opuszczają "
-            f"komputera."
-        )
+        self.log(t(
+            "Pierwsze uruchomienie: pobieram model rozpoznawania mowy {model} "
+            "(ok. {rozmiar}). To jednorazowe — potem "
+            "program działa bez internetu, a nagrania nigdy nie opuszczają "
+            "komputera."
+        ).format(model=model, rozmiar=download.rozmiar_opis(model)))
         self.pobierz_model(model)
 
     def pobierz_model(self, model: str) -> None:
@@ -1361,15 +1426,16 @@ class App:
         self.cancel_btn.configure(state="normal")
         self.file_progress["value"] = 0
         self.overall_var.set("")
-        self.status_var.set(f"Pobieram model {model}…")
+        self.status_var.set(t("Pobieram model {model}…").format(model=model))
         put = self.events.put
+        co = t("model {model}").format(model=model)
 
         def praca() -> None:
             try:
                 download.pobierz_model(
                     model,
                     models_dir(),
-                    on_progress=lambda b, w, v: put(("download_progress", f"model {model}", b, w, v)),
+                    on_progress=lambda b, w, v: put(("download_progress", co, b, w, v)),
                     log=lambda m: put(("log", m)),
                     cancel=self.cancel_flag.is_set,
                 )
@@ -1387,20 +1453,20 @@ class App:
         self.start_btn.configure(state="normal")
         self.cancel_btn.configure(state="disabled")
         if blad is None:
-            self.status_var.set("Pobieranie przerwane — następna próba ruszy od tego miejsca.")
+            self.status_var.set(t("Pobieranie przerwane — następna próba ruszy od tego miejsca."))
             self.log(self.status_var.get())
         elif blad:
-            self.status_var.set("Nie udało się pobrać modelu.")
-            self.log(f"BŁĄD: {blad}")
+            self.status_var.set(t("Nie udało się pobrać modelu."))
+            self.log(t("BŁĄD: {blad}").format(blad=blad))
             messagebox.showerror(APP_TITLE, blad, parent=self.root)
         else:
             self.file_progress["value"] = 1000
-            self.status_var.set(f"Model {model} gotowy. Możesz przeciągać nagrania.")
+            self.status_var.set(t("Model {model} gotowy. Możesz przeciągać nagrania.").format(model=model))
 
-    # -- aktualizacje (wydania z repozytorium) -----------------------------
+    # -- aktualizacje (GitHub albo folder firmowy) -------------------------
 
     def sprawdz_aktualizacje(self, reczne: bool = True) -> None:
-        """Pyta GitHuba o nową wersję, w osobnym wątku.
+        """Pyta o nową wersję (GitHub albo folder firmowy), w osobnym wątku.
 
         Sprawdzenie w tle przy starcie milczy, gdy nic nie znajdzie albo nie
         ma sieci. Ręczne (z odnośnika) zawsze odpowiada.
@@ -1409,7 +1475,7 @@ class App:
             return
         self._sprawdzam = True
         if reczne and not self._busy():
-            self.status_var.set("Sprawdzam, czy jest nowa wersja…")
+            self.status_var.set(t("Sprawdzam, czy jest nowa wersja…"))
 
         def praca() -> None:
             try:
@@ -1424,13 +1490,13 @@ class App:
         self._sprawdzam = False
         if blad:
             if reczne:
-                self.status_var.set("Nie udało się sprawdzić aktualizacji.")
+                self.status_var.set(t("Nie udało się sprawdzić aktualizacji."))
                 messagebox.showwarning(
-                    APP_TITLE, f"Nie udało się sprawdzić, czy jest nowa wersja.\n\n{blad}",
+                    APP_TITLE, t("Nie udało się sprawdzić, czy jest nowa wersja.\n\n{blad}").format(blad=blad),
                     parent=self.root,
                 )
             else:
-                self.log(f"Sprawdzanie aktualizacji nie powiodło się: {blad}")
+                self.log(t("Sprawdzanie aktualizacji nie powiodło się: {blad}").format(blad=blad))
             return
 
         self.settings.aktualizacje_sprawdzone = time.time()
@@ -1439,24 +1505,25 @@ class App:
         if akt is None:
             if reczne:
                 if not self._busy():
-                    self.status_var.set(f"Masz najnowszą wersję ({__version__}).")
+                    self.status_var.set(t("Masz najnowszą wersję ({w}).").format(w=__version__))
                 messagebox.showinfo(
-                    APP_TITLE, f"Masz najnowszą wersję {APP_TITLE} ({__version__}).",
+                    APP_TITLE, t("Masz najnowszą wersję {app} ({w}).").format(app=APP_TITLE, w=__version__),
                     parent=self.root,
                 )
             return
         if not reczne and akt.wersja == self.settings.pominieta_wersja:
-            self.log(f"Dostępna jest wersja {akt.wersja} (pominięta na Twoje życzenie).")
+            self.log(t("Dostępna jest wersja {w} (pominięta na Twoje życzenie).").format(w=akt.wersja))
             return
         self._pokaz_baner(akt)
 
     def _pokaz_baner(self, akt) -> None:
         self._aktualizacja = akt
         self.baner_tekst.configure(
-            text=f"Dostępna nowa wersja {APP_TITLE} {akt.wersja}   (masz {__version__})"
+            text=t("Dostępna nowa wersja {app} {nowa}   (masz {obecna})").format(
+                app=APP_TITLE, nowa=akt.wersja, obecna=__version__)
         )
         self.baner.grid()
-        self.log(f"Dostępna nowa wersja: {akt.wersja}. Kliknij „Zaktualizuj teraz”.")
+        self.log(t("Dostępna nowa wersja: {w}. Kliknij „Zaktualizuj teraz”.").format(w=akt.wersja))
         try:
             self.root.bell()
         except tk.TclError:
@@ -1469,13 +1536,28 @@ class App:
         if self._aktualizacja is not None:
             self.settings.pominieta_wersja = self._aktualizacja.wersja
             self.settings.save()
-            self.log(f"Wersja {self._aktualizacja.wersja} pominięta — "
-                     f"„Sprawdź aktualizacje” pokaże ją ponownie.")
+            self.log(t("Wersja {w} pominięta — „Sprawdź aktualizacje” pokaże ją ponownie.")
+                     .format(w=self._aktualizacja.wersja))
         self._ukryj_baner()
 
     def co_nowego(self) -> None:
-        if self._aktualizacja is not None and self._aktualizacja.strona:
-            webbrowser.open(self._aktualizacja.strona)
+        akt = self._aktualizacja
+        if akt is None:
+            return
+        if akt.opis and not akt.strona.lower().startswith(("http://", "https://")):
+            # Wydanie z folderu firmowego nie ma strony — opis pokazujemy w oknie.
+            _show_report(self.root, t("Co nowego w wersji {w}").format(w=akt.wersja), akt.opis)
+        else:
+            self._otworz_strone_wydania(akt)
+
+    def _otworz_strone_wydania(self, akt) -> None:
+        """Strona wydania na GitHubie albo folder firmowy w Eksploratorze."""
+        if not akt.strona:
+            return
+        if akt.strona.lower().startswith(("http://", "https://")):
+            webbrowser.open(akt.strona)
+        else:
+            _open_folder(Path(akt.strona))
 
     def zaktualizuj(self) -> None:
         akt = self._aktualizacja
@@ -1484,18 +1566,18 @@ class App:
         if self._busy():
             messagebox.showinfo(
                 APP_TITLE,
-                "Program jeszcze pracuje. Zaktualizuj, gdy skończy — pasek "
-                "z nową wersją zostanie na miejscu.",
+                t("Program jeszcze pracuje. Zaktualizuj, gdy skończy — pasek "
+                  "z nową wersją zostanie na miejscu."),
                 parent=self.root,
             )
             return
         if not update.mozna_zainstalowac(akt):
             # Bez instalatora, sumy albo prawidłowego podpisu nie uruchamiamy
             # niczego — zostaje pobranie ręczne ze strony wydania.
-            self.log(f"Wersji {akt.wersja} program nie zainstaluje sam: "
-                     f"{akt.uwaga or 'wydanie nie ma sprawdzalnego instalatora'}. "
-                     f"Otwieram stronę wydania.")
-            webbrowser.open(akt.strona)
+            self.log(t("Wersji {w} program nie zainstaluje sam: {powod}. Otwieram stronę wydania.")
+                     .format(w=akt.wersja,
+                             powod=akt.uwaga or t("wydanie nie ma sprawdzalnego instalatora")))
+            self._otworz_strone_wydania(akt)
             return
 
         self._ukryj_baner()
@@ -1503,15 +1585,16 @@ class App:
         self.start_btn.configure(state="disabled")
         self.cancel_btn.configure(state="normal")
         self.file_progress["value"] = 0
-        self.status_var.set(f"Pobieram wersję {akt.wersja}…")
+        self.status_var.set(t("Pobieram wersję {w}…").format(w=akt.wersja))
         put = self.events.put
+        co = t("wersję {w}").format(w=akt.wersja)
 
         def praca() -> None:
             try:
                 sciezka = update.pobierz(
                     akt,
                     on_progress=lambda b, w, v: put(
-                        ("download_progress", f"wersję {akt.wersja}", b, w, v)),
+                        ("download_progress", co, b, w, v)),
                     log=lambda m: put(("log", m)),
                     cancel=self.cancel_flag.is_set,
                 )
@@ -1529,25 +1612,26 @@ class App:
         self.start_btn.configure(state="normal")
         self.cancel_btn.configure(state="disabled")
         if blad is None:
-            self.status_var.set("Pobieranie aktualizacji przerwane.")
+            self.status_var.set(t("Pobieranie aktualizacji przerwane."))
             self.baner.grid()
             return
         if blad:
-            self.status_var.set("Nie udało się pobrać aktualizacji.")
-            self.log(f"BŁĄD: {blad}")
+            self.status_var.set(t("Nie udało się pobrać aktualizacji."))
+            self.log(t("BŁĄD: {blad}").format(blad=blad))
             self.baner.grid()
             messagebox.showerror(APP_TITLE, blad, parent=self.root)
             return
 
         self.file_progress["value"] = 1000
-        self.status_var.set("Instaluję nową wersję — program uruchomi się ponownie sam.")
+        self.status_var.set(t("Instaluję nową wersję — program uruchomi się ponownie sam."))
         try:
             update.uruchom_instalator(sciezka)
         except Exception as exc:
-            self.log(f"BŁĄD: nie udało się uruchomić instalatora: {exc}")
+            self.log(t("BŁĄD: nie udało się uruchomić instalatora: {blad}").format(blad=exc))
             messagebox.showerror(
                 APP_TITLE,
-                f"Nie udało się uruchomić instalatora:\n{exc}\n\nPlik: {sciezka}",
+                t("Nie udało się uruchomić instalatora:\n{blad}\n\nPlik: {plik}").format(
+                    blad=exc, plik=sciezka),
                 parent=self.root,
             )
             return
@@ -1557,7 +1641,7 @@ class App:
     def cancel(self) -> None:
         if self._busy():
             self.cancel_flag.set()
-            self.status_var.set("Przerywam po bieżącym fragmencie…")
+            self.status_var.set(t("Przerywam po bieżącym fragmencie…"))
             self.cancel_btn.configure(state="disabled")
 
     # -- pompa zdarzeń z wątku roboczego -----------------------------------
@@ -1586,7 +1670,7 @@ class App:
             self.overall_progress["value"] = max(0.0, min(event[1], 1.0)) * 1000
         elif kind == "file_started":
             index, total, path = event[1], event[2], event[3]
-            self._opis_pliku = f"plik {index + 1} z {total}"
+            self._opis_pliku = t("plik {i} z {n}").format(i=index + 1, n=total)
             self.overall_var.set(self._opis_pliku)
             self.file_progress["value"] = 0
             self._postep_biezacy = 0.0
@@ -1595,7 +1679,7 @@ class App:
                 # inaczej pierwsze szacunki byłyby zawyżone o start silnika.
                 self._praca_start = time.monotonic()
             self._biezacy = path
-            self._set_row(path, "przetwarzanie…", "run")
+            self._set_row(path, t("przetwarzanie…"), "run")
         elif kind == "file_finished":
             self._on_file_finished(event[1])
         elif kind == "row_duration":
@@ -1609,7 +1693,7 @@ class App:
 
                 odpowiedz.update(zapytaj(self.root, result, audio))
             except Exception as exc:
-                self.log(f"Nie udało się otworzyć okna mówców: {exc}")
+                self.log(t("Nie udało się otworzyć okna mówców: {blad}").format(blad=exc))
             finally:
                 gotowe.set()
         elif kind == "download_progress":
@@ -1630,18 +1714,18 @@ class App:
         elif kind == "nagranie_czas":
             self.rec_czas.configure(text=_hms(event[1]))
         elif kind == "nagranie_ostrzezenie":
-            self.log(f"UWAGA (nagrywanie): {event[1]}")
+            self.log(t("UWAGA (nagrywanie): {tekst}").format(tekst=event[1]))
             self.status_var.set(event[1])
         elif kind == "nagranie_blad":
             self._ustaw_stan_nagrywania(False)
-            self.log(f"BŁĄD nagrywania: {event[1]}")
-            self.status_var.set("Nagrywanie przerwane.")
+            self.log(t("BŁĄD nagrywania: {blad}").format(blad=event[1]))
+            self.status_var.set(t("Nagrywanie przerwane."))
             messagebox.showerror(APP_TITLE, event[1], parent=self.root)
         elif kind == "nagranie_koniec":
             self._po_nagraniu(Path(event[1]), event[2])
         elif kind == "nagranie_anulowane":
             self._ustaw_stan_nagrywania(False)
-            self.status_var.set("Nagranie odrzucone — nic nie zostało zapisane.")
+            self.status_var.set(t("Nagranie odrzucone — nic nie zostało zapisane."))
         elif kind == "nagranie_urzadzenia":
             self._wypelnij_urzadzenia(event[1], event[2], event[3])
         elif kind == "nagranie_odzyskane":
@@ -1698,12 +1782,12 @@ class App:
         self._zrobione_w_toku.add(iid)
         if job.ok and job.result:
             self._set_row(
-                iid, f"✓  gotowe, {job.result.speed_ratio:.1f}× szybciej", "ok"
+                iid, t("✓  gotowe, {x:.1f}× szybciej").format(x=job.result.speed_ratio), "ok"
             )
             if job.outputs:
                 self.last_output_dir = next(iter(job.outputs.values())).parent
         else:
-            self._set_row(iid, job.error[:60] or "błąd", "err")
+            self._set_row(iid, job.error[:60] or t("błąd"), "err")
 
     def _on_done(self, results) -> None:
         self.worker = None
@@ -1720,11 +1804,11 @@ class App:
 
         self.overall_var.set("")
         if self.cancel_flag.is_set():
-            self.status_var.set(f"Przerwano. Ukończono {_liczba_plikow(done)}.")
+            self.status_var.set(t("Przerwano. Ukończono {pliki}.").format(pliki=_liczba_plikow(done)))
         elif failed:
-            self.status_var.set(f"Zakończono: {done} OK, {failed} z błędem.")
+            self.status_var.set(t("Zakończono: {ok} OK, {zle} z błędem.").format(ok=done, zle=failed))
         else:
-            self.status_var.set(f"Gotowe — przetworzono {_liczba_plikow(done)}.")
+            self.status_var.set(t("Gotowe — przetworzono {pliki}.").format(pliki=_liczba_plikow(done)))
             self.overall_progress["value"] = 1000
 
         self.log(self.status_var.get())
@@ -1736,7 +1820,7 @@ class App:
 
     def choose_output(self) -> None:
         path = filedialog.askdirectory(
-            title="Gdzie zapisywać transkrypcje?",
+            title=t("Gdzie zapisywać transkrypcje?"),
             initialdir=self.outdir_var.get() or str(default_output_dir()),
         )
         if path:
@@ -1754,7 +1838,7 @@ class App:
                 else default_output_dir()
             )
         if not Path(target).is_dir():
-            messagebox.showinfo(APP_TITLE, f"Folder nie istnieje: {target}")
+            messagebox.showinfo(APP_TITLE, t("Folder nie istnieje: {folder}").format(folder=target))
             return
         _open_folder(Path(target))
 
@@ -1764,7 +1848,7 @@ class App:
             self._pomoc.lift()
             return
         okno = self._pomoc = tk.Toplevel(self.root)
-        okno.title(f"Jak to działa — {APP_NAME}")
+        okno.title(t("Jak to działa — {app}").format(app=APP_NAME))
         okno.configure(bg=BG)
         okno.resizable(False, False)
         okno.transient(self.root)
@@ -1784,35 +1868,34 @@ class App:
                      justify="left", anchor="w", wraplength=400).pack(
                 side="left", fill="x")
 
-        naglowek("Trzy kroki", 0)
+        naglowek(t("Trzy kroki"), 0)
         for i, tekst in enumerate((
-            "Przeciągnij nagrania albo cały folder w pole po lewej. "
-            "Audio i wideo, ile chcesz naraz.",
-            "Zaznacz, w jakiej postaci zapisać tekst: z czasem, sam tekst "
-            "albo napisy do filmu.",
-            "Kliknij Transkrybuj. Gotowe pliki trafią do folderu wyników.",
+            t("Przeciągnij nagrania albo cały folder w pole po lewej. "
+              "Audio i wideo, ile chcesz naraz."),
+            t("Zaznacz, w jakiej postaci zapisać tekst: z czasem, sam tekst "
+              "albo napisy do filmu."),
+            t("Kliknij Transkrybuj. Gotowe pliki trafią do folderu wyników."),
         ), start=1):
             punkt(str(i), tekst, ACCENT_HOVER)
 
-        naglowek("Co jeszcze potrafi", 18)
+        naglowek(t("Co jeszcze potrafi"), 18)
         o_nagrywaniu = (
-            "Nagrywa spotkania. „Nagrywaj spotkanie” zbiera Twój mikrofon i dźwięk "
-            "z głośników (np. Teams) do jednego pliku, a po zatrzymaniu od razu go "
-            "transkrybuje. Najlepiej w słuchawkach.",
+            t("Nagrywa spotkania. „Nagrywaj spotkanie” zbiera Twój mikrofon i dźwięk "
+              "z głośników (np. Teams) do jednego pliku, a po zatrzymaniu od razu go "
+              "transkrybuje. Najlepiej w słuchawkach."),
         ) if WYDANIE.nagrywanie else ()
         for tekst in o_nagrywaniu + (
-            "Podpisuje, kto mówi. Włącz „Rozpoznaj, kto co powiedział” "
-            "i wpisz liczbę osób — po nagraniu nadasz im imiona.",
-            "Lepiej pisze nazwiska i skróty, jeśli wpiszesz je w pole Kontekst.",
-            "Rozpoznaje mowę na Twoim komputerze — nagrania nigdy nie trafiają do internetu.",
-            "Plik z kolejki usuniesz krzyżykiem przy nim, klawiszem Delete "
-            "albo prawym przyciskiem myszy.",
+            t("Podpisuje, kto mówi. Włącz „Rozpoznaj, kto co powiedział” "
+              "i wpisz liczbę osób — po nagraniu nadasz im imiona."),
+            t("Rozpoznaje mowę na Twoim komputerze — nagrania nigdy nie trafiają do internetu."),
+            t("Plik z kolejki usuniesz krzyżykiem przy nim, klawiszem Delete "
+              "albo prawym przyciskiem myszy."),
         ):
             punkt("•", tekst, FG_FAINT)
 
         przyciski = tk.Frame(tresc, bg=BG)
         przyciski.pack(fill="x", pady=(22, 0))
-        ttk.Button(przyciski, text="Zamknij", style="Accent.TButton",
+        ttk.Button(przyciski, text=t("Zamknij"), style="Accent.TButton",
                    command=okno.destroy).pack(side="right")
         okno.bind("<Escape>", lambda _e: okno.destroy())
         okno.update_idletasks()
@@ -1828,23 +1911,23 @@ class App:
         if not plik.is_file():
             messagebox.showinfo(
                 APP_TITLE,
-                f"Nie znaleziono pliku {plik.name}. W wersji uruchamianej z kodu "
-                f"tworzy go polecenie: python tools\\licencje.py",
+                t("Nie znaleziono pliku {plik}. W wersji uruchamianej z kodu "
+                  "tworzy go polecenie: python tools\\licencje.py").format(plik=plik.name),
                 parent=self.root,
             )
             return
         try:
             os.startfile(str(plik))  # type: ignore[attr-defined]
         except OSError as exc:
-            messagebox.showerror(APP_TITLE, f"Nie udało się otworzyć {plik}:\n{exc}",
+            messagebox.showerror(APP_TITLE, t("Nie udało się otworzyć {plik}:\n{blad}").format(plik=plik, blad=exc),
                                  parent=self.root)
 
     def show_diagnosis(self) -> None:
-        self.status_var.set("Sprawdzam środowisko…")
+        self.status_var.set(t("Sprawdzam środowisko…"))
         self.root.update_idletasks()
         report = doctor.format_diagnosis(doctor.diagnose())
-        self.status_var.set("Gotowy.")
-        _show_report(self.root, "Diagnostyka środowiska", report)
+        self.status_var.set(t("Gotowy."))
+        _show_report(self.root, t("Diagnostyka środowiska"), report)
 
     def log(self, message: str) -> None:
         self.log_text.configure(state="normal")
@@ -1855,7 +1938,7 @@ class App:
     def on_close(self) -> None:
         if self._nagrywa():
             if not messagebox.askyesno(
-                APP_TITLE, "Trwa nagrywanie. Zatrzymać je, zapisać nagranie i zamknąć program?",
+                APP_TITLE, t("Trwa nagrywanie. Zatrzymać je, zapisać nagranie i zamknąć program?"),
                 parent=self.root,
             ):
                 return
@@ -1864,7 +1947,7 @@ class App:
             self.nagrywarka.czekaj(15)
         if self._busy():
             if not messagebox.askyesno(
-                APP_TITLE, "Program jeszcze pracuje. Na pewno zamknąć?"
+                APP_TITLE, t("Program jeszcze pracuje. Na pewno zamknąć?")
             ):
                 return
             self.cancel_flag.set()
@@ -1887,21 +1970,21 @@ class App:
 def _liczba_plikow(n: int) -> str:
     """1 plik, 2 pliki, 5 plików, 22 pliki."""
     if n == 1:
-        return "1 plik"
+        return t("1 plik")
     if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
-        return f"{n} pliki"
-    return f"{n} plików"
+        return t("{n} pliki").format(n=n)
+    return t("{n} plików").format(n=n)
 
 
 def _opis_pozostalego(sekundy: float) -> str:
     """„pozostało ok. 6 min” — zaokrąglone, bo to szacunek, nie pomiar."""
     if sekundy < 45:
-        return "pozostało mniej niż minuta"
+        return t("pozostało mniej niż minuta")
     minuty = round(sekundy / 60)
     if minuty < 60:
-        return f"pozostało ok. {minuty} min"
+        return t("pozostało ok. {min} min").format(min=minuty)
     godziny, minuty = divmod(minuty, 60)
-    return f"pozostało ok. {godziny} godz. {minuty:02d} min"
+    return t("pozostało ok. {godz} godz. {min:02d} min").format(godz=godziny, min=minuty)
 
 
 def _open_folder(path: Path) -> None:
@@ -1940,10 +2023,10 @@ def _show_report(parent, title: str, text: str) -> None:
     row.pack(fill="x", padx=12, pady=(0, 12))
     ttk.Button(
         row,
-        text="Kopiuj do schowka",
+        text=t("Kopiuj do schowka"),
         command=lambda: (parent.clipboard_clear(), parent.clipboard_append(text)),
     ).pack(side="left")
-    ttk.Button(row, text="Zamknij", command=win.destroy).pack(side="right")
+    ttk.Button(row, text=t("Zamknij"), command=win.destroy).pack(side="right")
     theme.ciemny_pasek_tytulu(win)
 
 
@@ -1972,10 +2055,10 @@ def show_report_window(title: str, text: str) -> int:
     row.pack(fill="x", padx=12, pady=(0, 12))
     ttk.Button(
         row,
-        text="Kopiuj do schowka",
+        text=t("Kopiuj do schowka"),
         command=lambda: (root.clipboard_clear(), root.clipboard_append(text)),
     ).pack(side="left")
-    ttk.Button(row, text="Zamknij", command=root.destroy).pack(side="right")
+    ttk.Button(row, text=t("Zamknij"), command=root.destroy).pack(side="right")
     theme.ciemny_pasek_tytulu(root)
 
     root.mainloop()
@@ -1985,11 +2068,14 @@ def show_report_window(title: str, text: str) -> int:
 def run(initial_files: Optional[List[Path]] = None) -> int:
     from .splash import Splash
 
+    # Język przed pierwszym napisem: ustawienie programu, a bez niego język
+    # Windows. Ekran powitalny jest jeden — napisy bierze z t().
+    teksty.ustaw_z_ustawien(Settings.load().jezyk)
     root = make_root(ukryj=True)
     ekran = Splash(
         root,
         wersja=__version__,
-        podpis=f"wersja {__version__}  ·  {WYDANIE.wydawca}",
+        podpis=t("wersja {w}  ·  {wydawca}").format(w=__version__, wydawca=WYDANIE.wydawca),
     )
     try:
         App(root, initial_files=initial_files, splash=ekran)

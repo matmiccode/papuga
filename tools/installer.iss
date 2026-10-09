@@ -38,11 +38,13 @@
 #ifndef Wariant
   #define Wariant "lekki"
 #endif
-; 1 = domyślnie instalacja dla bieżącego użytkownika, bez uprawnień
-; administratora. Wydanie publiczne aktualizuje się samo, a bez tego każda
-; aktualizacja pytałaby o zgodę administratora.
+; 1 = instalacja dla bieżącego użytkownika, bez uprawnień administratora
+; (od 2026-10-09 oba wydania; do 1.3.0 wydanie firmowe szło do Program
+; Files). Papuga aktualizuje się sama, a bez tego każda aktualizacja
+; pytałaby o zgodę administratora; w firmie pracownik hasła administratora
+; nie ma wcale. 0 = domyślnie dla wszystkich użytkowników (Program Files).
 #ifndef PerUser
-  #define PerUser "0"
+  #define PerUser "1"
 #endif
 
 #define AppExe AppFile + ".exe"
@@ -71,6 +73,9 @@ OutputDir={#OutputDir}
 OutputBaseFilename={#OutputName}
 SetupIconFile={#AssetsDir}\icon.ico
 WizardStyle=modern
+; Język instalatora: polski Windows → polski, każdy inny → angielski,
+; bez pytania (jak w programie: pigułka PL/EN w oknie).
+ShowLanguageDialog=auto
 DisableProgramGroupPage=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -82,15 +87,16 @@ Compression=lzma2/max
 SolidCompression=yes
 LZMANumBlockThreads=4
 
-; Wydanie firmowe instaluje się domyślnie do Program Files (wymaga
-; uprawnień administratora); użytkownik bez nich dostanie propozycję
-; instalacji w swoim profilu.
-; Wydanie publiczne instaluje się zawsze w profilu i o nic nie pyta: bez
-; okienka „dla mnie / dla wszystkich” nikt nie wybierze przypadkiem
-; Program Files, a z nim pytania UAC przy instalacji i każdej aktualizacji.
-; `commandline` pozwala wymusić tryb przełącznikiem /CURRENTUSER albo
-; /ALLUSERS, co przydaje się przy cichym wdrożeniu:
-;   <instalator>.exe /VERYSILENT /CURRENTUSER /NORESTART
+; Oba wydania instalują się w profilu użytkownika ({localappdata}\Programs)
+; i o nic nie pytają: bez okienka „dla mnie / dla wszystkich” nikt nie
+; wybierze przypadkiem Program Files, a z nim pytania UAC przy instalacji
+; i każdej aktualizacji. Bez `dialog` Inno nie zagląda też do trybu
+; poprzedniej instalacji (UsePreviousPrivileges działa tylko z dialogiem),
+; więc stara kopia firmowa w Program Files nie wciąga instalatora z powrotem
+; w tryb administratora — zdejmuje ją PrepareToInstall w [Code].
+; `commandline` pozwala wymusić tryb przełącznikiem /ALLUSERS (Program
+; Files, UAC), co przydaje się przy cichym wdrożeniu przez dział IT:
+;   <instalator>.exe /VERYSILENT /ALLUSERS /NORESTART
 #if PerUser == "1"
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=commandline
@@ -100,15 +106,40 @@ PrivilegesRequiredOverridesAllowed=commandline dialog
 
 [Languages]
 Name: "polski"; MessagesFile: "compiler:Languages\Polish.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
 
-#ifdef AppDescription
 [Messages]
-WelcomeLabel2={#AppDescription}%n%nAplikacja [name/ver] zostanie teraz zainstalowana na komputerze.%n%nZalecane jest zamknięcie wszystkich innych uruchomionych programów przed rozpoczęciem procesu instalacji.
+#ifdef AppDescription
+polski.WelcomeLabel2={#AppDescription}%n%nAplikacja [name/ver] zostanie teraz zainstalowana na komputerze.%n%nZalecane jest zamknięcie wszystkich innych uruchomionych programów przed rozpoczęciem procesu instalacji.
+#endif
+#ifdef AppDescriptionEn
+english.WelcomeLabel2={#AppDescriptionEn}%n%nThis will install [name/ver] on your computer.%n%nIt is recommended that you close all other applications before continuing.
 #endif
 
+; Napisy instalatora w obu językach; {cm:...} wybiera według języka.
+[CustomMessages]
+polski.SkrotPulpit=Utwórz skrót na pulpicie
+english.SkrotPulpit=Create a desktop shortcut
+polski.Skroty=Skróty:
+english.Skroty=Shortcuts:
+polski.Diagnostyka=Diagnostyka {#AppName}
+english.Diagnostyka={#AppName} diagnostics
+polski.Odinstaluj=Odinstaluj {#AppName}
+english.Odinstaluj=Uninstall {#AppName}
+polski.Uruchom=Uruchom {#AppName}
+english.Uruchom=Launch {#AppName}
+polski.MigracjaPytanie=Na tym komputerze jest wcześniejsza instalacja programu {#AppName} dla wszystkich użytkowników (w Program Files). Nowe wersje instalują się w profilu użytkownika i aktualizują bez uprawnień administratora, więc stara kopia zostanie teraz odinstalowana. Windows poprosi o zgodę administratora ten jeden raz.%n%nUstawienia, modele i transkrypcje zostają. Zamknij program {#AppName}, jeśli jest uruchomiony, i kliknij OK.
+english.MigracjaPytanie=This computer has an earlier installation of {#AppName} for all users (in Program Files). New versions install in the user profile and update without administrator rights, so the old copy will be uninstalled now. Windows will ask for administrator consent this one time.%n%nSettings, models and transcripts stay. Close {#AppName} if it is running, then click OK.
+polski.MigracjaPrzerwana=Instalacja przerwana — stara kopia w Program Files zostaje.
+english.MigracjaPrzerwana=Installation cancelled — the old copy in Program Files stays.
+polski.MigracjaBlad=Nie udało się odinstalować starej kopii z Program Files (brak zgody administratora?). Odinstaluj „{#AppName}” w Ustawieniach systemu Windows (Aplikacje) i uruchom ten instalator ponownie.
+english.MigracjaBlad=Could not uninstall the old copy from Program Files (administrator consent denied?). Uninstall “{#AppName}” in Windows Settings (Apps) and run this installer again.
+polski.UsunDane=Usunąć także pobrane modele i ustawienia programu?%n%n%1%n%nWybierz „Nie”, jeśli zamierzasz zainstalować program ponownie — model nie będzie wtedy pobierany drugi raz. Twoje transkrypcje nie zostaną usunięte.
+english.UsunDane=Also remove the downloaded models and the app settings?%n%n%1%n%nChoose “No” if you plan to reinstall the app — the model will not be downloaded again. Your transcripts will not be removed.
+
 [Tasks]
-Name: "desktopicon"; Description: "Utwórz skrót na pulpicie"; \
-    GroupDescription: "Skróty:"
+Name: "desktopicon"; Description: "{cm:SkrotPulpit}"; \
+    GroupDescription: "{cm:Skroty}"
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; \
@@ -116,15 +147,15 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; \
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{group}\Diagnostyka {#AppName}"; Filename: "{app}\{#AppExe}"; \
+Name: "{group}\{cm:Diagnostyka}"; Filename: "{app}\{#AppExe}"; \
     Parameters: "--doctor"; IconFilename: "{app}\{#AppExe}"
-Name: "{group}\Odinstaluj {#AppName}"; Filename: "{uninstallexe}"
+Name: "{group}\{cm:Odinstaluj}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; \
     Tasks: desktopicon
 
 [Run]
 Filename: "{app}\{#AppExe}"; \
-    Description: "Uruchom {#AppName}"; \
+    Description: "{cm:Uruchom}"; \
     Flags: nowait postinstall skipifsilent
 ; Aktualizacja z programu idzie w trybie cichym, więc powyższy wpis jest
 ; pomijany. Ten uruchamia program z powrotem — jako zwykły użytkownik,
@@ -146,6 +177,67 @@ begin
   Result := ExpandConstant('{param:AKTUALIZACJA|0}') = '1';
 end;
 
+// Tekst z [CustomMessages] w języku instalatora, z %n jako nową linią
+// i %1 podmienionym na argument (MsgBox nie rozumie %n).
+function Komunikat(Nazwa, Arg: String): String;
+begin
+  Result := CustomMessage(Nazwa);
+  StringChangeEx(Result, '%n', #13#10, True);
+  StringChangeEx(Result, '%1', Arg, True);
+end;
+
+// Wydanie firmowe do 1.3.0 instalowało się do Program Files (tryb
+// administratora). Od 2026-10-09 oba wydania stoją w profilu użytkownika,
+// więc stara kopia z Program Files musi zejść — inaczej zostałyby dwie
+// (dwa wpisy w Aplikacjach, dwa komplety skrótów). Windows pyta o zgodę
+// administratora ten jeden raz; kolejne instalacje i aktualizacje już nie.
+// Ustawień i modeli w %LOCALAPPDATA% stary deinstalator po cichu nie rusza.
+function StaraKopiaDlaWszystkich(var Deinstalator: String): Boolean;
+var
+  Klucz, Polecenie: String;
+begin
+  Result := False;
+  Klucz := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{'
+           + '{#AppGuid}' + '}_is1';
+  if not RegQueryStringValue(HKLM64, Klucz, 'UninstallString', Polecenie) then
+    Exit;
+  Deinstalator := RemoveQuotes(Trim(Polecenie));
+  // Wpis bez pliku to sierota po ręcznym skasowaniu katalogu — nie ma
+  // czego odinstalowywać.
+  Result := (Deinstalator <> '') and FileExists(Deinstalator);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Deinstalator: String;
+  Kod: Integer;
+begin
+  Result := '';
+  // /ALLUSERS: instalacja dalej w Program Files, zwykła aktualizacja w miejscu.
+  if IsAdminInstallMode then
+    Exit;
+  if not StaraKopiaDlaWszystkich(Deinstalator) then
+    Exit;
+  if not WizardSilent then
+    if MsgBox(Komunikat('MigracjaPytanie', ''), mbConfirmation, MB_OKCANCEL) <> IDOK then
+    begin
+      Result := Komunikat('MigracjaPrzerwana', '');
+      Exit;
+    end;
+  Log('Odinstalowuję starą kopię dla wszystkich użytkowników: ' + Deinstalator);
+  if not ShellExec('runas', Deinstalator, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES',
+                   ExtractFileDir(Deinstalator), SW_HIDE, ewWaitUntilTerminated, Kod) then
+  begin
+    Result := Komunikat('MigracjaBlad', '');
+    Exit;
+  end;
+  if Kod <> 0 then
+    Log(Format('Stary deinstalator zakończył się kodem %d', [Kod]));
+  // Deinstalator Inno pracuje z kopii w TEMP i chwilę po powrocie jeszcze
+  // sprząta — krótka pauza, zanim zaczniemy kopiować pliki.
+  Sleep(1500);
+end;
+
 // Po odinstalowaniu pyta, czy usunąć też pobrane modele i ustawienia.
 // Domyślnie „Nie” — ktoś, kto odinstalowuje przed instalacją nowej wersji,
 // nie powinien przypadkiem stracić modelu. Ciche odinstalowanie nie pyta
@@ -160,11 +252,7 @@ begin
   Dane := ExpandConstant('{localappdata}\{#AppFile}');
   if not DirExists(Dane) then
     Exit;
-  if MsgBox('Usunąć także pobrane modele i ustawienia programu?' + #13#10 + #13#10 +
-            Dane + #13#10 + #13#10 +
-            'Wybierz „Nie”, jeśli zamierzasz zainstalować program ponownie — ' +
-            'model nie będzie wtedy pobierany drugi raz. ' +
-            'Twoje transkrypcje nie zostaną usunięte.',
+  if MsgBox(Komunikat('UsunDane', Dane),
             mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
     DelTree(Dane, True, True, True);
 end;

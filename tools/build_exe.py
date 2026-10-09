@@ -48,6 +48,7 @@ VENV_SITE = ROOT / ".venv" / "Lib" / "site-packages"
 
 from whisper_automat.core.wydanie import WYDANIA, Wydanie  # noqa: E402
 from whisper_automat.core import wydanie as wydania  # noqa: E402
+from whisper_automat import teksty  # noqa: E402
 
 #: Wydanie, które budujemy — ustawiane w main() z --wydanie.
 WYD: Wydanie = WYDANIA["firma"]
@@ -70,6 +71,26 @@ def podpis_firmy() -> str:
     if not tekst:
         print(f"  UWAGA: brak {PLIK_PODPISU.name} — wydanie firmowe podpisze się samym MATCODE.")
     return tekst or "MATCODE"
+
+
+#: Folder z aktualizacjami wydania firmowego (udział sieciowy albo adres
+#: http) — też poza repozytorium, bo adres udziału firmy nie ma trafić do
+#: publikowanego kodu. Do paczki idzie przez wydanie.json, tak jak podpis.
+PLIK_AKTUALIZACJI = Path(__file__).resolve().parent / "aktualizacje_firmy.local.txt"
+
+
+def folder_aktualizacji_firmy() -> str:
+    ze_srodowiska = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
+    if ze_srodowiska:
+        return ze_srodowiska
+    try:
+        tekst = PLIK_AKTUALIZACJI.read_text(encoding="utf-8").strip()
+    except OSError:
+        tekst = ""
+    if not tekst:
+        print(f"  UWAGA: brak {PLIK_AKTUALIZACJI.name} — wydanie firmowe nie będzie "
+              f"sprawdzać aktualizacji.")
+    return tekst
 
 #: Wersja „essentials" waży ułamek pełnej (~90 MB zamiast ~370 MB za oba pliki),
 #: a zawiera wszystkie kodeki, których używamy do wyciągania ścieżki audio.
@@ -374,11 +395,16 @@ def zbuduj_instalator(katalog_aplikacji: Path) -> Path:
             f"/DAppName={WYD.nazwa}",
             f"/DAppFullName={WYD.pelna_nazwa}",
             *([f"/DAppDescription={WYD.opis}"] if WYD.opis else []),
+            # Ekran powitalny po angielsku bierze opis ze słownika programu.
+            *([f"/DAppDescriptionEn={teksty.EN[WYD.opis]}"]
+              if WYD.opis in teksty.EN else []),
             f"/DAppFile={WYD.plik}",
             f"/DAppGuid={WYD.inno_id.strip('{}')}",
-            # Wydanie z aktualizacjami instaluje się w profilu — inaczej
-            # każda aktualizacja pytałaby o zgodę administratora.
-            f"/DPerUser={1 if WYD.aktualizacje else 0}",
+            # Oba wydania instalują się w profilu użytkownika, bez hasła
+            # administratora (decyzja 2026-10-09; do 1.3.0 wydanie firmowe
+            # szło do Program Files). Starą kopię z Program Files zdejmuje
+            # sam instalator — PrepareToInstall w installer.iss.
+            "/DPerUser=1",
             *([f"/DAppUrl={WYD.strona_url}"] if WYD.strona_url else []),
             f"/DOutputName={nazwa}",
             f"/DWariant={'offline' if offline else 'lekki'}",
@@ -449,9 +475,10 @@ def main() -> int:
     WYD = WYDANIA[args.wydanie]
     if WYD.kod == "firma":
         # Ten sam tekst podpisuje plik .exe i instalator (wydawca) oraz
-        # stopkę okna (autor).
+        # stopkę okna (autor). Folder aktualizacji — udział sieciowy firmy.
         podpis = podpis_firmy()
-        WYD = replace(WYD, wydawca=podpis, autor=podpis)
+        WYD = replace(WYD, wydawca=podpis, autor=podpis,
+                      aktualizacje_folder=folder_aktualizacji_firmy())
 
     if os.name != "nt":
         raise SystemExit("Budowanie działa tylko na Windows.")

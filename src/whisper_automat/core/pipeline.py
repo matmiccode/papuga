@@ -22,6 +22,7 @@ from .engine import (
     modele_lokalne,
     summarize,
 )
+from ..teksty import t
 
 #: Ekstrakcja audio to zwykle ułamek czasu transkrypcji — stąd podział wagi.
 EXTRACT_WEIGHT = 0.12
@@ -90,7 +91,7 @@ class Runner:
         results: List[JobResult] = []
 
         if not total:
-            self.cb.log("Brak plików do przetworzenia.")
+            self.cb.log(t("Brak plików do przetworzenia."))
             return results
 
         hw = probe.probe()
@@ -98,7 +99,11 @@ class Runner:
         model, device, compute = self.settings.resolve_model(rec)
 
         if not self.settings.model:
-            self.cb.log(f"Model dobrany automatycznie: {model} ({rec.reason})")
+            self.cb.log(
+                t("Model dobrany automatycznie: {model} ({powod})").format(
+                    model=model, powod=rec.reason
+                )
+            )
 
         try:
             self._pobierz_jesli_brak(model)
@@ -110,8 +115,10 @@ class Runner:
             )
         except Cancelled:
             self.cb.log(
-                "Pobieranie modelu przerwane. Następna próba ruszy od miejsca, "
-                "w którym stanęło."
+                t(
+                    "Pobieranie modelu przerwane. Następna próba ruszy od miejsca, "
+                    "w którym stanęło."
+                )
             )
             return results
         except EngineError as exc:
@@ -120,14 +127,16 @@ class Runner:
             # gorszy model niż żadna transkrypcja.
             zapasowy = self._model_zapasowy(model)
             if zapasowy is None:
-                self.cb.log(f"BŁĄD: {exc}")
+                self.cb.log(t("BŁĄD: {blad}").format(blad=exc))
                 for f in files:
                     results.append(JobResult(source=f, error=str(exc)))
                 return results
 
             self.cb.log(
-                f"Modelu {model} nie udało się pobrać. Używam modelu "
-                f"{zapasowy}, który jest już na dysku."
+                t(
+                    "Modelu {model} nie udało się pobrać. Używam modelu "
+                    "{zapasowy}, który jest już na dysku."
+                ).format(model=model, zapasowy=zapasowy)
             )
             try:
                 engine = self.transcriber.load(
@@ -137,19 +146,21 @@ class Runner:
                     log=self.cb.log,
                 )
             except EngineError as zapasowy_exc:
-                self.cb.log(f"BŁĄD: {zapasowy_exc}")
+                self.cb.log(t("BŁĄD: {blad}").format(blad=zapasowy_exc))
                 for f in files:
                     results.append(JobResult(source=f, error=str(zapasowy_exc)))
                 return results
 
-        self.cb.log(f"Silnik: {engine}")
+        self.cb.log(t("Silnik: {silnik}").format(silnik=engine))
 
         for index, source in enumerate(files):
             if self.cb.cancelled():
-                self.cb.log("Przerwano — pozostałe pliki pominięte.")
+                self.cb.log(t("Przerwano — pozostałe pliki pominięte."))
                 break
             if self.cb.skipped(source):
-                self.cb.log(f"Pominięto {source.name} — usunięty z kolejki.")
+                self.cb.log(
+                    t("Pominięto {plik} — usunięty z kolejki.").format(plik=source.name)
+                )
                 self.cb.overall_progress((index + 1) / total)
                 continue
 
@@ -178,7 +189,7 @@ class Runner:
             if wszystkie:
                 self.cb.file_progress(pobrane / wszystkie)
 
-        self.cb.status(f"Pobieram model {model}…")
+        self.cb.status(t("Pobieram model {model}…").format(model=model))
         try:
             download.pobierz_model(
                 model, models_dir(), on_progress=postep,
@@ -203,12 +214,17 @@ class Runner:
         gotowa i zostanie zapisana, tyle że bez podziału na mówców.
         """
         zadane = self.settings.speakers
-        ile = f"{zadane} os." if zadane else "liczba nieznana"
-        self.cb.status(f"[{index + 1}/{total}] Rozpoznaję mówców ({ile})…")
+        ile = t("{n} os.").format(n=zadane) if zadane else t("liczba nieznana")
+        self.cb.status(
+            t("[{i}/{n}] Rozpoznaję mówców ({ile})…").format(
+                i=index + 1, n=total, ile=ile
+            )
+        )
         self.cb.log(
-            "Rozpoznawanie mówców: "
-            + (f"szukam {zadane} różnych głosów." if zadane
-               else "liczba osób nie podana — algorytm zgaduje.")
+            t("Rozpoznawanie mówców: {opis}").format(
+                opis=t("szukam {n} różnych głosów.").format(n=zadane) if zadane
+                else t("liczba osób nie podana — algorytm zgaduje.")
+            )
         )
         baza = self._waga_audio + self._waga_tekstu
         try:
@@ -221,20 +237,22 @@ class Runner:
                 log=self.cb.log,
             )
         except diarization.DiarizationError as exc:
-            self.cb.log(f"Nie rozpoznano mówców: {exc}")
-            self.cb.log("Transkrypcja zostanie zapisana bez podziału na osoby.")
+            self.cb.log(t("Nie rozpoznano mówców: {blad}").format(blad=exc))
+            self.cb.log(t("Transkrypcja zostanie zapisana bez podziału na osoby."))
             return
 
         if not odcinki:
-            self.cb.log("Nie wykryto wyraźnie oddzielonych głosów.")
+            self.cb.log(t("Nie wykryto wyraźnie oddzielonych głosów."))
             return
 
         przed = len(result.segments)
         result.segments = diarization.przypisz(result.segments, odcinki)
         if len(result.segments) > przed:
             self.cb.log(
-                f"Segmenty podzielone tam, gdzie zmieniał się mówca: "
-                f"{przed} -> {len(result.segments)}."
+                t(
+                    "Segmenty podzielone tam, gdzie zmieniał się mówca: "
+                    "{przed} -> {po}."
+                ).format(przed=przed, po=len(result.segments))
             )
         # Odcinki jadą razem z wynikiem — okno „Kto jest kim?" bierze z nich
         # próbkę głosu, bo najdłuższa wypowiedź jest lepsza niż pierwszy
@@ -244,18 +262,24 @@ class Runner:
         rozpoznani = {o.mowca for o in odcinki}
         z_tekstem = {s.speaker for s in result.segments if s.speaker >= 0}
         self.cb.log(
-            f"Rozpoznano {len(rozpoznani)} głos(ów) w {len(odcinki)} odcinkach."
+            t("Rozpoznano {glosy} głos(ów) w {odcinki} odcinkach.").format(
+                glosy=len(rozpoznani), odcinki=len(odcinki)
+            )
         )
         if zadane and len(rozpoznani) != zadane:
             self.cb.log(
-                f"UWAGA: podano {zadane} osób, a rozdzieliły się "
-                f"{len(rozpoznani)}. Jeśli to nie zgadza się z nagraniem, "
-                f"popraw liczbę osób i powtórz."
+                t(
+                    "UWAGA: podano {podano} osób, a rozdzieliły się "
+                    "{rozpoznano}. Jeśli to nie zgadza się z nagraniem, "
+                    "popraw liczbę osób i powtórz."
+                ).format(podano=zadane, rozpoznano=len(rozpoznani))
             )
         if len(z_tekstem) < len(rozpoznani):
             self.cb.log(
-                f"Tekst trafił do {len(z_tekstem)} osób — pozostałe mówiły "
-                f"zbyt krótko, żeby wygrać jakikolwiek fragment."
+                t(
+                    "Tekst trafił do {n} osób — pozostałe mówiły "
+                    "zbyt krótko, żeby wygrać jakikolwiek fragment."
+                ).format(n=len(z_tekstem))
             )
 
         # Imiona pytamy zanim zapiszemy pliki — inaczej trzeba by je
@@ -263,11 +287,15 @@ class Runner:
         try:
             nazwy = self.cb.ask_speakers(result, audio) or {}
         except Exception as exc:
-            self.cb.log(f"Nie udało się zapytać o imiona: {exc}")
+            self.cb.log(t("Nie udało się zapytać o imiona: {blad}").format(blad=exc))
             nazwy = {}
         if nazwy:
             result.speaker_names = nazwy
-            self.cb.log("Podpisano mówców: " + ", ".join(sorted(nazwy.values())))
+            self.cb.log(
+                t("Podpisano mówców: {imiona}").format(
+                    imiona=", ".join(sorted(nazwy.values()))
+                )
+            )
 
     def _model_zapasowy(self, odrzucony: str) -> Optional[str]:
         """Najlepszy model leżący już na dysku, inny niż ten, który zawiódł."""
@@ -289,15 +317,22 @@ class Runner:
         is_temp = False
 
         try:
-            self.cb.status(f"[{index + 1}/{total}] Analizuję {source.name}…")
+            self.cb.status(
+                t("[{i}/{n}] Analizuję {plik}…").format(
+                    i=index + 1, n=total, plik=source.name
+                )
+            )
             info = media.probe_media(source)
 
             if info.is_video:
                 self.cb.log(
-                    f"{source.name}: wideo, {media.format_duration(info.duration)} "
-                    f"— wyciągam ścieżkę audio."
+                    t("{plik}: wideo, {czas} — wyciągam ścieżkę audio.").format(
+                        plik=source.name, czas=media.format_duration(info.duration)
+                    )
                 )
-                self.cb.status(f"[{index + 1}/{total}] Wyciągam audio…")
+                self.cb.status(
+                    t("[{i}/{n}] Wyciągam audio…").format(i=index + 1, n=total)
+                )
             else:
                 self.cb.log(
                     f"{source.name}: audio {info.audio_codec}, "
@@ -313,9 +348,13 @@ class Runner:
             temp_audio = audio if is_temp else None
 
             if self.cb.cancelled():
-                raise Cancelled("Przerwano przed transkrypcją.")
+                raise Cancelled(t("Przerwano przed transkrypcją."))
 
-            self.cb.status(f"[{index + 1}/{total}] Transkrybuję {source.name}…")
+            self.cb.status(
+                t("[{i}/{n}] Transkrybuję {plik}…").format(
+                    i=index + 1, n=total, plik=source.name
+                )
+            )
             # Znaczniki słów kosztują trochę czasu, więc włączamy je tylko
             # wtedy, gdy naprawdę są potrzebne: przy napisach oraz przy
             # rozpoznawaniu mówców, gdzie bez nich nie da się podzielić
@@ -328,7 +367,6 @@ class Runner:
                 source_path=source,
                 duration=info.duration,
                 language=self.settings.language or None,
-                initial_prompt=self.settings.initial_prompt,
                 beam_size=self.settings.beam_size,
                 vad_filter=self.settings.vad_filter,
                 word_timestamps=needs_words,
@@ -349,19 +387,25 @@ class Runner:
             job.ok = True
 
             self.cb.file_progress(1.0)
-            self.cb.log(f"{source.name}: gotowe — {summarize(result)}")
+            self.cb.log(
+                t("{plik}: gotowe — {podsumowanie}").format(
+                    plik=source.name, podsumowanie=summarize(result)
+                )
+            )
             for fmt, path in job.outputs.items():
                 self.cb.log(f"    -> {path}")
 
         except Cancelled as exc:
             job.error = str(exc)
-            self.cb.log(f"{source.name}: przerwano.")
+            self.cb.log(t("{plik}: przerwano.").format(plik=source.name))
         except (media.MediaError, EngineError) as exc:
             job.error = str(exc)
-            self.cb.log(f"BŁĄD ({source.name}): {exc}")
+            self.cb.log(t("BŁĄD ({plik}): {blad}").format(plik=source.name, blad=exc))
         except Exception as exc:  # nieprzewidziane — nie wywracaj całej kolejki
             job.error = f"{type(exc).__name__}: {exc}"
-            self.cb.log(f"BŁĄD ({source.name}): {job.error}")
+            self.cb.log(
+                t("BŁĄD ({plik}): {blad}").format(plik=source.name, blad=job.error)
+            )
             self.cb.log(traceback.format_exc(limit=3))
         finally:
             if temp_audio and not self.settings.keep_extracted_audio:

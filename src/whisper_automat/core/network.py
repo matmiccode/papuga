@@ -20,6 +20,7 @@ import ssl
 import urllib.error
 import urllib.request
 
+from ..teksty import t
 from .wydanie import biezace
 
 #: Gdzie wersja zainstalowana trzyma modele — do podpowiedzi dla użytkownika.
@@ -49,7 +50,9 @@ def enable_system_certificates() -> str:
         if sciezka and os.path.isfile(sciezka):
             os.environ["SSL_CERT_FILE"] = sciezka
             _wstrzykniete = True
-            return f"Certyfikaty z pliku wskazanego przez {zmienna}: {sciezka}"
+            return t("Certyfikaty z pliku wskazanego przez {zmienna}: {plik}").format(
+                zmienna=zmienna, plik=sciezka
+            )
 
     try:
         import truststore
@@ -60,10 +63,10 @@ def enable_system_certificates() -> str:
     try:
         truststore.inject_into_ssl()
         _wstrzykniete = True
-        return "Certyfikaty weryfikowane przez magazyn systemowy."
+        return t("Certyfikaty weryfikowane przez magazyn systemowy.")
     except Exception as exc:
         _wstrzykniete = True
-        return f"Nie udało się włączyć systemowego magazynu certyfikatów: {exc}"
+        return t("Nie udało się włączyć systemowego magazynu certyfikatów: {blad}").format(blad=exc)
 
 
 def opisz_blad_sieci(exc: BaseException) -> str:
@@ -75,34 +78,34 @@ def opisz_blad_sieci(exc: BaseException) -> str:
     niski = tekst.lower()
 
     if "certificate_verify_failed" in niski or "certificate verify failed" in niski:
-        return (
+        return t(
             "Nie udało się zweryfikować certyfikatu serwera. Zwykle znaczy to, "
             "że sieć firmowa podmienia certyfikaty własnym urzędem.\n"
             "Co można zrobić:\n"
             "  1. Poproś dział IT o dodanie firmowego urzędu certyfikacji do "
             "magazynu Windows (zwykle już tam jest — program go użyje).\n"
             "  2. Albo skopiuj gotowy model z komputera, na którym już działa: "
-            f"cały folder {FOLDER_MODELI}.\n"
+            "cały folder {folder}.\n"
             "  3. Albo wskaż folder z modelem zmienną WHISPER_AUTOMAT_MODELS."
-        )
+        ).format(folder=FOLDER_MODELI)
 
     if any(s in niski for s in ("proxy", "407")):
-        return (
+        return t(
             "Połączenie blokuje serwer proxy wymagający logowania. Poproś dział "
             "IT o dostęp do huggingface.co albo skopiuj gotowy model z innego "
-            f"komputera (folder {FOLDER_MODELI})."
-        )
+            "komputera (folder {folder})."
+        ).format(folder=FOLDER_MODELI)
 
     if any(
         s in niski
         for s in ("connecterror", "connectionerror", "timeout", "getaddrinfo",
                   "temporary failure in name resolution", "name or service not known")
     ):
-        return (
+        return t(
             "Brak połączenia z serwerem modeli (huggingface.co). Sprawdź "
             "internet albo skopiuj gotowy model z innego komputera "
-            f"(folder {FOLDER_MODELI})."
-        )
+            "(folder {folder})."
+        ).format(folder=FOLDER_MODELI)
 
     return ""
 
@@ -115,11 +118,11 @@ def sprawdz_hub(timeout: float = 10.0):
             HUB_PROBE_URL, headers={"User-Agent": biezace().plik}
         )
         with urllib.request.urlopen(zadanie, timeout=timeout) as odpowiedz:
-            return True, f"huggingface.co osiągalne (HTTP {odpowiedz.status})"
+            return True, t("huggingface.co osiągalne (HTTP {kod})").format(kod=odpowiedz.status)
     except urllib.error.HTTPError as exc:
         # Sam kod błędu HTTP oznacza, że połączenie i TLS zadziałały.
-        return True, f"huggingface.co osiągalne (HTTP {exc.code})"
+        return True, t("huggingface.co osiągalne (HTTP {kod})").format(kod=exc.code)
     except ssl.SSLError as exc:
-        return False, f"błąd certyfikatu: {exc}"
+        return False, t("błąd certyfikatu: {blad}").format(blad=exc)
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
