@@ -143,6 +143,11 @@ class MiksTest(unittest.TestCase):
         self.assertEqual(N.rms_dbfs(np.zeros(100, dtype=np.int16)), -120.0)
         self.assertAlmostEqual(N.rms_dbfs(np.full(100, 32767, dtype=np.int16)), 0.0, places=1)
 
+    def test_przeplot(self):
+        m = np.array([1, 2, 3], dtype=np.int16)
+        s = np.array([-1, -2, -3, -4], dtype=np.int16)
+        np.testing.assert_array_equal(N.przeplot(m, s), [1, -1, 2, -2, 3, -3])
+
 
 class ZapisTest(unittest.TestCase):
     def setUp(self):
@@ -152,6 +157,7 @@ class ZapisTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def dekoduj(self, plik: Path) -> np.ndarray:
+        """Próbki int16 — dla stereo przeplecione, jak w `przeplot`."""
         import av
 
         out = []
@@ -162,6 +168,50 @@ class ZapisTest(unittest.TestCase):
             except av.error.FFmpegError:
                 pass
         return np.concatenate(out) if out else np.zeros(0, np.int16)
+
+    def test_stereo_z_tagiem(self):
+        import av
+
+        plik = self.tmp / "Spotkanie 2026-10-15 09-00.flac"
+        z = N.ZapisFlac(plik, kanaly=2, tagi=N.tagi_nagrania(plik))
+        m = (np.sin(np.arange(N.RATE * 2) / 20.0) * 10000).astype(np.int16)
+        s = (np.sin(np.arange(N.RATE * 2) / 7.0) * 8000).astype(np.int16)
+        for i in range(0, m.size, N.BLOK):
+            z.zapisz(N.przeplot(m[i:i + N.BLOK], s[i:i + N.BLOK]))
+        z.zamknij()
+        self.assertEqual(z.probki, m.size)
+        with av.open(str(plik)) as k:
+            st = k.streams.audio[0]
+            self.assertEqual(st.channels, 2)
+            self.assertEqual(st.rate, N.RATE)
+            self.assertEqual(k.metadata.get(N.TAG), N.TAG_WARTOSC)
+            self.assertEqual(k.metadata.get("title"), plik.stem)
+        dane = self.dekoduj(plik)
+        np.testing.assert_array_equal(dane[0::2], m)
+        np.testing.assert_array_equal(dane[1::2], s)
+
+    def test_urwany_stereo_zachowuje_kanaly_i_tag(self):
+        import av
+
+        plik = self.tmp / "Spotkanie 2026-10-15 09-30.flac"
+        z = N.ZapisFlac(plik, kanaly=2, tagi=N.tagi_nagrania(plik))
+        m = (np.sin(np.arange(N.RATE * 3) / 20.0) * 10000).astype(np.int16)
+        for i in range(0, m.size, N.BLOK):
+            z.zapisz(N.przeplot(m[i:i + N.BLOK], -m[i:i + N.BLOK]))
+        z.fsync()
+        z._plik.close()
+        plik.write_bytes(plik.read_bytes()[:-700])
+        N.sciezka_znacznika(plik).write_text(json.dumps({"pid": 999999999}), encoding="utf-8")
+        cel = N.napraw_nagranie(plik)
+        with av.open(str(cel)) as k:
+            self.assertEqual(k.streams.audio[0].channels, 2)
+            self.assertEqual(k.metadata.get(N.TAG), N.TAG_WARTOSC)
+            self.assertEqual(k.metadata.get("title"), cel.stem)
+        dane = self.dekoduj(cel)
+        n = dane.size // 2
+        self.assertGreaterEqual(n, m.size - N.RATE // 2)
+        np.testing.assert_array_equal(dane[0::2][:n], m[:n])
+        np.testing.assert_array_equal(dane[1::2][:n], -m[:n])
 
     def test_flac_zamkniety_ma_dlugosc(self):
         import av
@@ -209,6 +259,43 @@ class ZapisTest(unittest.TestCase):
         self.assertEqual(N.znajdz_niedokonczone(self.tmp), [])
         N.usun_znacznik(plik)
 
+    def test_znaczniki_obok_nagrania(self):
+        plik = self.tmp / "Spotkanie 2026-10-15 11-00.flac"
+        self.assertIsNone(N.zapisz_znaczniki(plik, []))
+        cel = N.zapisz_znaczniki(plik, [{"czas": 734.2, "opis": ""}, {"czas": 12.0, "opis": "decyzja"}])
+        self.assertEqual(cel.name, "Spotkanie 2026-10-15 11-00.znaczniki.json")
+        self.assertEqual(N.wczytaj_znaczniki(plik),
+                         [{"czas": 12.0, "opis": "decyzja"}, {"czas": 734.2, "opis": ""}])
+        self.assertEqual(N.wczytaj_znaczniki(self.tmp / "nie ma.flac"), [])
+        cel.write_text("to nie json", encoding="utf-8")
+        self.assertEqual(N.wczytaj_znaczniki(plik), [])
+
+    def test_naprawa_przenosi_znaczniki(self):
+        plik = self.tmp / "Spotkanie 2026-10-15 11-30.flac"
+        z = N.ZapisFlac(plik, kanaly=2, tagi=N.tagi_nagrania(plik))
+        dane = (np.sin(np.arange(N.RATE * 2) / 20.0) * 10000).astype(np.int16)
+        for i in range(0, dane.size, N.BLOK):
+            z.zapisz(N.przeplot(dane[i:i + N.BLOK], dane[i:i + N.BLOK]))
+        z.fsync()
+        z._plik.close()
+        plik.write_bytes(plik.read_bytes()[:-500])
+        N.zapisz_znaczniki(plik, [{"czas": 1.0, "opis": ""}])
+        N.sciezka_znacznika(plik).write_text(json.dumps({"pid": 999999999}), encoding="utf-8")
+        cel = N.napraw_nagranie(plik)
+        self.assertFalse(N.sciezka_znacznikow(plik).exists())
+        self.assertEqual(N.wczytaj_znaczniki(cel), [{"czas": 1.0, "opis": ""}])
+
+    def test_znacznik_tylko_w_trakcie(self):
+        n = N.Nagrywarka()
+        self.assertIsNone(n.znacznik())
+        n.stan = n.NAGRYWA
+        n.czas_trwania = 12.345
+        self.assertEqual(n.znacznik("x"), {"czas": 12.345, "opis": "x"})
+        n.stan = n.PAUZA
+        self.assertEqual(n.znacznik()["czas"], 12.345)
+        self.assertEqual(len(n.znaczniki), 2)
+        n.stan = n.BEZCZYNNA
+
     def test_nazwa_pliku(self):
         kiedy = datetime(2026, 10, 8, 14, 30)
         a = N.nazwa_pliku(self.tmp, kiedy)
@@ -227,6 +314,24 @@ class UrzadzeniaTest(unittest.TestCase):
         self.assertIs(N._znajdz([a, b], "nie ma"), b)
         self.assertIs(N._znajdz([a], ""), a)
         self.assertIsNone(N._znajdz([], ""))
+
+    def test_czy_przepiac(self):
+        # Tylko „domyślne” w ustawieniach i inna nazwa domyślnego Windows.
+        self.assertTrue(N._czy_przepiac("", "Mikrofon wbudowany", "Mikrofon zestawu"))
+        self.assertFalse(N._czy_przepiac("", "Mikrofon zestawu", "Mikrofon zestawu"))
+        self.assertFalse(N._czy_przepiac("Mikrofon wbudowany", "Mikrofon wbudowany", "Mikrofon zestawu"))
+        self.assertFalse(N._czy_przepiac("", "Mikrofon wbudowany", ""))
+        self.assertFalse(N._czy_przepiac("", "", "Mikrofon zestawu"))
+
+    def test_domyslne_z_punktow(self):
+        from whisper_automat.core import urzadzenia as U
+
+        punkty = [U.PunktAudio("Mik A", True, U.MIKROFON, U.WBUDOWANE, False, False, "a"),
+                  U.PunktAudio("Mik B", True, U.MIKROFON, U.USB, True, True, "b"),
+                  U.PunktAudio("Głośniki", False, U.GLOSNIKI, U.WBUDOWANE, True, False, "c")]
+        self.assertEqual(N.Nagrywarka._domyslne(punkty, wejscie=True), "Mik B")
+        self.assertEqual(N.Nagrywarka._domyslne(punkty, wejscie=False), "Głośniki")
+        self.assertEqual(N.Nagrywarka._domyslne([], wejscie=True), "")
 
 
 if __name__ == "__main__":

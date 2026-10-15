@@ -1,4 +1,9 @@
-"""Zapis transkrypcji do plików: TXT, SRT, VTT, JSON."""
+"""Zapis transkrypcji do plików: TXT, SRT, VTT, JSON.
+
+Zaznaczone momenty (`result.znaczniki`, z nagrania — przycisk „Zaznacz
+moment”) trafiają do obu TXT w miejscu, gdzie padły, i do JSON jako
+`markers`. Napisy SRT/VTT ich nie dostają — tam byłyby śmieciem na ekranie.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,11 @@ import json
 import textwrap
 from pathlib import Path
 from typing import Dict, List
+
+from ..teksty import t
+
+#: Znak zaznaczonego momentu w TXT.
+FLAGA = "⚑"
 
 #: Klucze używane w GUI i w konfiguracji.
 FORMATS = ["txt", "txt_plain", "srt", "vtt", "json"]
@@ -41,6 +51,18 @@ def _clock(seconds: float, sep: str = ".", millis: bool = True) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}{sep}{ms:03d}"
 
 
+def _znaczniki(result) -> List[dict]:
+    """Zaznaczone momenty posortowane po czasie; pusta lista, gdy brak."""
+    lista = getattr(result, "znaczniki", None) or []
+    return sorted((z for z in lista if isinstance(z, dict)), key=lambda z: float(z.get("czas", 0.0)))
+
+
+def _opis_znacznika(z: dict) -> str:
+    opis = str(z.get("opis", "") or "").strip()
+    tekst = t("zaznaczony moment")
+    return f"{FLAGA} {tekst}: {opis}" if opis else f"{FLAGA} {tekst}"
+
+
 def _mowca(result, seg) -> str:
     """Prefiks z nazwą mówcy albo pusty, gdy mówców nie rozpoznawano."""
     if result is None or getattr(seg, "speaker", -1) < 0:
@@ -51,12 +73,18 @@ def _mowca(result, seg) -> str:
 
 
 def write_txt(result, path: Path) -> Path:
-    """TXT z zakresem czasu przed każdym segmentem."""
+    """TXT z zakresem czasu przed każdym segmentem; znaczniki w swoim miejscu."""
     lines = []
+    znaczniki = _znaczniki(result)
     for seg in result.segments:
+        while znaczniki and float(znaczniki[0]["czas"]) < seg.start:
+            z = znaczniki.pop(0)
+            lines.append(f"[{_clock(float(z['czas']))}]  {_opis_znacznika(z)}")
         start = _clock(seg.start)
         end = _clock(seg.end)
         lines.append(f"[{start} --> {end}]  {_mowca(result, seg)}{seg.text.strip()}")
+    for z in znaczniki:
+        lines.append(f"[{_clock(float(z['czas']))}]  {_opis_znacznika(z)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -72,6 +100,18 @@ def write_txt_plain(result, path: Path, width: int = 100) -> Path:
     #: nie potrzebuje nazwy przy każdym akapicie — to tylko szum w tekście.
     podpisany = None
 
+    znaczniki = _znaczniki(result)
+    #: Akapity ze znacznikiem nie są zawijane — to jedna krótka linia.
+    bez_zawijania: set = set()
+
+    def flaga(z: dict) -> None:
+        minuty, reszta = divmod(int(float(z["czas"])), 60)
+        godziny, minuty = divmod(minuty, 60)
+        czas = f"{godziny}:{minuty:02d}:{reszta:02d}" if godziny else f"{minuty}:{reszta:02d}"
+        opis = str(z.get("opis", "") or "").strip()
+        paragraphs.append(f"{FLAGA} {czas}" + (f" — {opis}" if opis else ""))
+        bez_zawijania.add(len(paragraphs) - 1)
+
     for seg in result.segments:
         text = seg.text.strip()
         if not text:
@@ -81,10 +121,16 @@ def write_txt_plain(result, path: Path, width: int = 100) -> Path:
         # Nowy akapit przy zmianie mówcy albo po dłuższej przerwie w mowie.
         zmiana_mowcy = prev_speaker is not None and speaker != prev_speaker
         przerwa = prev_end is not None and seg.start - prev_end > 2.0
-        if buffer and (zmiana_mowcy or przerwa):
+        # Zaznaczony moment przed tym segmentem zamyka akapit i staje osobno.
+        znacznik_przed = bool(znaczniki) and float(znaczniki[0]["czas"]) < seg.start
+        if buffer and (zmiana_mowcy or przerwa or znacznik_przed):
             paragraphs.append(speaker_label + " ".join(buffer))
             buffer = []
             speaker_label = ""
+        while znaczniki and float(znaczniki[0]["czas"]) < seg.start:
+            flaga(znaczniki.pop(0))
+            # Po znaczniku mówca podpisuje się na nowo — czytelnik wrócił tu z daleka.
+            podpisany = None
 
         if not buffer and speaker >= 0 and speaker != podpisany:
             speaker_label = _mowca(result, seg)
@@ -96,8 +142,11 @@ def write_txt_plain(result, path: Path, width: int = 100) -> Path:
 
     if buffer:
         paragraphs.append(speaker_label + " ".join(buffer))
+    for z in znaczniki:
+        flaga(z)
 
-    wrapped = [textwrap.fill(p, width=width) for p in paragraphs]
+    wrapped = [p if i in bez_zawijania else textwrap.fill(p, width=width)
+               for i, p in enumerate(paragraphs)]
     path.write_text("\n\n".join(wrapped) + "\n", encoding="utf-8")
     return path
 
@@ -242,6 +291,9 @@ def write_json(result, path: Path) -> Path:
         "engine": result.engine,
         "elapsed_seconds": round(result.elapsed, 2),
         "text": result.text,
+        **({"markers": [{"time": round(float(z["czas"]), 3), "label": str(z.get("opis", "") or "")}
+                        for z in _znaczniki(result)]}
+           if _znaczniki(result) else {}),
         "segments": [
             {
                 "id": i,

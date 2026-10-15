@@ -29,6 +29,14 @@ PLIK_PODPISU = Path(__file__).resolve().parent / "podpis_firmy.local.txt"
 if os.environ["WHISPER_AUTOMAT_WYDANIE"] == "firma" and PLIK_PODPISU.is_file():
     os.environ.setdefault("WHISPER_AUTOMAT_PODPIS_FIRMY",
                           PLIK_PODPISU.read_text(encoding="utf-8").strip())
+PLIK_KONTAKTU = Path(__file__).resolve().parent / "kontakt_firmy.local.txt"
+if os.environ["WHISPER_AUTOMAT_WYDANIE"] == "firma" and PLIK_KONTAKTU.is_file():
+    os.environ.setdefault("WHISPER_AUTOMAT_KONTAKT_FIRMY",
+                          PLIK_KONTAKTU.read_text(encoding="utf-8").strip())
+if os.environ["WHISPER_AUTOMAT_WYDANIE"] == "firma":
+    # Baza głosów (core/glosy.py) na udawanym, pustym folderze — przycisk
+    # „Dodaj mój głos do bazy…” ma być na zrzutach wydania firmowego.
+    os.environ.setdefault("WHISPER_AUTOMAT_GLOSY", str(wyjscie.parent / "zrzut-glosy"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from whisper_automat import app as A  # noqa: E402
@@ -72,8 +80,34 @@ def przygotuj():
         aplikacja.baner_tekst.configure(text=t("Dostępna nowa wersja {app} {nowa}   (masz {obecna})")
                                         .format(app=A.APP_TITLE, nowa="1.5.0", obecna="1.4.0"))
         aplikacja.baner.grid()
+    if tryb == "wynik":
+        # Pasek „Transkrypcja zakończona” nad kolejką z gotowymi plikami.
+        pliki = ["Spotkanie zespołu 2026-10-14.flac", "Wywiad z burmistrzem — część 1.mp4"]
+        for i, nazwa in enumerate(pliki):
+            iid = aplikacja.tree.insert("", "end", text=nazwa, values=(
+                ["48:05", "12:41"][i], t("✓  gotowe, {x:.1f}× szybciej").format(x=[9.4, 11.8][i]),
+                A.USUN))
+            aplikacja.tree.item(iid, tags=("ok",))
+        aplikacja.files = [Path(n) for n in pliki]
+        aplikacja._odswiez_pusta_kolejke()
+        aplikacja.status_var.set(t("Gotowe — przetworzono {pliki}.").format(
+            pliki=A._liczba_plikow(2)))
+        aplikacja.overall_progress["value"] = 1000
+        aplikacja.file_progress["value"] = 1000
+        aplikacja.baner_wynik_tekst.configure(
+            text=t("Transkrypcja zakończona — {pliki} w folderze wyników.").format(
+                pliki=A._liczba_plikow(2)))
+        aplikacja.baner_wynik.grid()
     if tryb == "pomoc":
         aplikacja.pokaz_pomoc()
+    if tryb == "glos":
+        # Okno „Dodaj mój głos do bazy” na udawanej, pustej bazie.
+        from whisper_automat import glosy_okno
+
+        def otworz():
+            aplikacja._okno_glosu = glosy_okno.otworz(root, aplikacja.settings)
+
+        root.after(300, otworz)
     if tryb == "mowcy":
         aplikacja.diarize_var.set(True)
         aplikacja._toggle_diarize()
@@ -85,8 +119,39 @@ def przygotuj():
         aplikacja.rec_czas.configure(text="0:47:12", fg=A.FG)
         aplikacja.rec_paski["mikrofon"]["value"] = 620
         aplikacja.rec_paski["system"]["value"] = 410
+        aplikacja.rec_pauza_btn.configure(state="normal")
+        aplikacja.rec_znacznik_btn.configure(state="normal")
         aplikacja.start_btn.configure(state="disabled")
         aplikacja.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
+    if tryb == "zrodla":
+        # Okno „Źródła nagrania” na udawanych urządzeniach: laptop z monitorem
+        # po HDMI i zestawem USB (zrzut pokazuje samo okno).
+        from whisper_automat.core import urzadzenia as U
+
+        punkty = [
+            U.PunktAudio("Głośniki (Realtek(R) Audio)", False, U.GLOSNIKI, U.WBUDOWANE,
+                         domyslne=True, id="g1"),
+            U.PunktAudio("BenQ G2420HDB (HD Audio Driver for Display Audio)", False, U.MONITOR,
+                         U.WBUDOWANE, komunikacyjne=True, id="g2"),
+            U.PunktAudio("Zestaw słuchawkowy (Poly Blackwire 3320 Series)", False, U.ZESTAW,
+                         U.USB, id="g3"),
+            U.PunktAudio("Zestaw mikrofonów (Technologia Intel® Smart Sound dla mikrofonów "
+                         "cyfrowych)", True, U.MIKROFON, U.WBUDOWANE, domyslne=True,
+                         komunikacyjne=True, id="m1"),
+            U.PunktAudio("Mikrofon zestawu słuchawkowego (Poly Blackwire 3320 Series)", True,
+                         U.ZESTAW, U.USB, id="m2"),
+        ]
+        from whisper_automat.core import nagrywanie as N
+
+        # Okno ładuje listę w wątku — podstawiamy mu udawane źródła.
+        N.lista_urzadzen = lambda: (
+            [N.UrzadzenieAudio(i, p.nazwa, 2, 48000) for i, p in enumerate(punkty) if p.wejscie],
+            [N.UrzadzenieAudio(i, p.nazwa, 2, 48000, loopback_index=i)
+             for i, p in enumerate(punkty) if not p.wejscie])
+        U.punkty = lambda: punkty
+        aplikacja.settings.nagranie_mikrofon = punkty[4].nazwa
+        aplikacja.settings.nagranie_glosniki = punkty[2].nazwa
+        aplikacja.wybierz_urzadzenia()
 
 
 def przechwyc(hwnd):
@@ -140,6 +205,14 @@ def zrob():
         p = aplikacja._pomoc
         p.update()
         hwnd = ctypes.windll.user32.GetParent(p.winfo_id())
+    elif tryb == "zrodla":
+        okno = aplikacja._okno_urzadzen[0]
+        okno.update()
+        hwnd = ctypes.windll.user32.GetParent(okno.winfo_id())
+    elif tryb == "glos":
+        okno = aplikacja._okno_glosu.win
+        okno.update()
+        hwnd = ctypes.windll.user32.GetParent(okno.winfo_id())
     else:
         hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
     obraz = przechwyc(hwnd)

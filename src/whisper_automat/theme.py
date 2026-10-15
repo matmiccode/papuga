@@ -43,6 +43,7 @@ KAWA_FG = "#231a05"
 
 #: Pasek o nowej wersji — widać go od razu, ale nie krzyczy kolorem błędu.
 BANER_BG = "#22314a"
+BANER_OK_BG = "#1d3328"  # pasek „transkrypcja zakończona”: zieleń pod OK_COLOR
 
 #: Tor pustego paska postępu — ledwie widoczny, żeby bez pracy nie udawał
 #: linii oddzielającej.

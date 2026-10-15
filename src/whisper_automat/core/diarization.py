@@ -23,6 +23,14 @@ Dwie rzeczy warto wiedzieć, bo obie wyszły z pomiarów:
    porcjach narzut na przesyłanie danych do karty przewyższa zysk.
    Zmierzone na 10 minutach mowy: procesor 156 s, karta 212 s.
    Dlatego liczymy na procesorze i wprost uprzedzamy o czasie.
+
+Własne nagranie spotkania (nagrywanie.py, od 1.5) ma to, czego zwykła
+diaryzacja nie ma: lewy kanał to na pewno użytkownik, prawy to wszyscy
+inni. Dlatego pipeline puszcza diaryzację tylko na prawym kanale,
+a słowa użytkownika poznaje po poziomie kanałów (`odcinki_wlasne`):
+słowo jest „Ja”, gdy lewy kanał jest o 6 dB głośniejszy od prawego.
+Echo rozmówców w mikrofonie (głośniki zamiast słuchawek) trafia do
+lewego osłabione, więc próg wystarcza; w słuchawkach lewy jest czysty.
 """
 
 from __future__ import annotations
@@ -72,6 +80,14 @@ MIN_WSTAWKA_S = 0.4
 #: na prawdziwej mowie: około jednej długości nagrania, niezależnie od tego,
 #: czy komputer ma kartę graficzną.
 KOSZT_WZGLEDEM_NAGRANIA = 1.0
+
+#: Własne nagranie: słowo należy do użytkownika, gdy lewy kanał (mikrofon)
+#: jest głośniejszy od prawego (rozmówcy) o tyle decybeli…
+PROG_JA_DB = 6.0
+#: …i sam w sobie nie jest ciszą.
+CISZA_JA_DBFS = -50.0
+#: Sąsiednie słowa „Ja” oddalone o mniej niż tyle sekund tworzą jeden odcinek.
+PRZERWA_JA_S = 1.0
 
 
 class DiarizationError(RuntimeError):
@@ -469,6 +485,96 @@ def przypisz(segmenty, odcinki: List[Odcinek]) -> list:
             wynik.append(segment)
 
     return wynik
+
+
+# ---------------------------------------------------------------------------
+# Własne nagranie: tag i tor użytkownika
+# ---------------------------------------------------------------------------
+
+
+def tag_nagrania(tagi: Optional[dict]) -> Optional[dict]:
+    """Rozkłada tag `whisper_automat` z własnego nagrania na słownik.
+
+    `nagranie-spotkania;kanaly=mikrofon,system;wersja=1.5` →
+    `{"rodzaj": "nagranie-spotkania", "kanaly": ["mikrofon", "system"],
+    "wersja": "1.5"}`. None, gdy pliku nie nagrał ten program.
+    """
+    if not tagi:
+        return None
+    wartosc = ""
+    for klucz, v in tagi.items():
+        if str(klucz).lower() == "whisper_automat":
+            wartosc = str(v)
+            break
+    if not wartosc.startswith("nagranie-spotkania"):
+        return None
+    wynik: dict = {"rodzaj": "nagranie-spotkania", "kanaly": [], "wersja": ""}
+    for czesc in wartosc.split(";")[1:]:
+        if "=" not in czesc:
+            continue
+        k, v = czesc.split("=", 1)
+        k, v = k.strip().lower(), v.strip()
+        if k == "kanaly":
+            wynik["kanaly"] = [x.strip() for x in v.split(",") if x.strip()]
+        elif k == "wersja":
+            wynik["wersja"] = v
+    return wynik
+
+
+def _wczytaj_stereo(sciezka: Path):
+    """(lewy, prawy) jako float32 w [-1, 1] i częstotliwość — z WAV 16-bit stereo."""
+    with wave.open(str(sciezka)) as w:
+        if w.getsampwidth() != 2 or w.getnchannels() != 2:
+            raise DiarizationError(
+                t("Oczekiwano 16-bitowego WAV stereo — plik nie przeszedł konwersji.")
+            )
+        czestotliwosc = w.getframerate()
+        ramki = w.readframes(w.getnframes())
+
+    import numpy as np
+
+    dane = np.frombuffer(ramki, dtype=np.int16).astype(np.float32) / 32768.0
+    return dane[0::2], dane[1::2], czestotliwosc
+
+
+def _rms_dbfs(x) -> float:
+    import math
+
+    if x.size == 0:
+        return -120.0
+    rms = float((x.astype("float64") ** 2).mean() ** 0.5)
+    return max(-120.0, 20.0 * math.log10(rms)) if rms > 0 else -120.0
+
+
+def odcinki_wlasne(stereo: Path, segmenty, ja: int) -> List[Odcinek]:
+    """Odcinki, w których mówi użytkownik — z porównania kanałów własnego nagrania.
+
+    Dla każdego słowa (bez znaczników słów: całego segmentu) liczy poziom
+    lewego i prawego kanału w jego czasie. Słowo jest użytkownika, gdy lewy
+    jest głośniejszy o `PROG_JA_DB` i nie jest ciszą. Kolejne takie słowa
+    sklejają się w `Odcinek(start, koniec, ja)`. Odcinki są dokładnie po
+    słowach, więc w `przypisz` wygrywają z przybliżonymi odcinkami
+    diaryzacji toru rozmówców — pod warunkiem, że stoją na liście pierwsze.
+    """
+    lewy, prawy, czestotliwosc = _wczytaj_stereo(stereo)
+    odcinki: List[Odcinek] = []
+    n = int(lewy.size)
+    for segment in segmenty:
+        slowa = getattr(segment, "words", None) or [segment]
+        for slowo in slowa:
+            a = max(0, min(n, int(slowo.start * czestotliwosc)))
+            b = max(a, min(n, int(slowo.end * czestotliwosc)))
+            if b - a < czestotliwosc // 100:
+                # Krócej niż 10 ms — za mało, żeby cokolwiek zmierzyć.
+                continue
+            l_db, p_db = _rms_dbfs(lewy[a:b]), _rms_dbfs(prawy[a:b])
+            if l_db < CISZA_JA_DBFS or l_db - p_db < PROG_JA_DB:
+                continue
+            if odcinki and slowo.start - odcinki[-1].koniec <= PRZERWA_JA_S:
+                odcinki[-1].koniec = max(odcinki[-1].koniec, float(slowo.end))
+            else:
+                odcinki.append(Odcinek(float(slowo.start), float(slowo.end), ja))
+    return odcinki
 
 
 def etykieta(numer: int, nazwy: Optional[dict] = None) -> str:

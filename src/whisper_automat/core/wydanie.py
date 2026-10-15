@@ -28,7 +28,9 @@ WHISPER_AUTOMAT_PODPIS_FIRMY (ustawia ją np. tools/zrzut_okna.py), a bez
 niej podpisuje się samym MATCODE. Tak samo folder z aktualizacjami:
 w paczce z tools/aktualizacje_firmy.local.txt, z kodu ze zmiennej
 WHISPER_AUTOMAT_AKTUALIZACJE, a bez niej wydanie firmowe aktualizacji
-nie sprawdza.
+nie sprawdza. I adres do zgłoszeń („Zgłoś błąd lub pomysł” w stopce):
+w paczce z tools/kontakt_firmy.local.txt, z kodu ze zmiennej
+WHISPER_AUTOMAT_KONTAKT_FIRMY, a bez niej stopka nie ma tego odnośnika.
 """
 
 from __future__ import annotations
@@ -188,6 +190,9 @@ def biezace() -> Wydanie:
         folder = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
         if folder and _biezace.kod == "firma":
             _biezace = replace(_biezace, aktualizacje_folder=folder)
+        kontakt = os.environ.get("WHISPER_AUTOMAT_KONTAKT_FIRMY", "").strip()
+        if kontakt and _biezace.kod == "firma":
+            _biezace = replace(_biezace, kontakt_email=kontakt)
     return _biezace
 
 

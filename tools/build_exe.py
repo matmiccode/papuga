@@ -73,6 +73,24 @@ def podpis_firmy() -> str:
     return tekst or "MATCODE"
 
 
+#: Adres do zgłoszeń z wydania firmowego („Zgłoś błąd lub pomysł” w stopce)
+#: — też poza repozytorium, jak podpis. Bez pliku stopka nie ma odnośnika.
+PLIK_KONTAKTU = Path(__file__).resolve().parent / "kontakt_firmy.local.txt"
+
+
+def kontakt_firmy() -> str:
+    ze_srodowiska = os.environ.get("WHISPER_AUTOMAT_KONTAKT_FIRMY", "").strip()
+    if ze_srodowiska:
+        return ze_srodowiska
+    try:
+        tekst = PLIK_KONTAKTU.read_text(encoding="utf-8").strip()
+    except OSError:
+        tekst = ""
+    if not tekst:
+        print(f"  UWAGA: brak {PLIK_KONTAKTU.name} — stopka bez „Zgłoś błąd lub pomysł”.")
+    return tekst
+
+
 #: Folder z aktualizacjami wydania firmowego (udział sieciowy albo adres
 #: http) — też poza repozytorium, bo adres udziału firmy nie ma trafić do
 #: publikowanego kodu. Do paczki idzie przez wydanie.json, tak jak podpis.
@@ -478,7 +496,8 @@ def main() -> int:
         # stopkę okna (autor). Folder aktualizacji — udział sieciowy firmy.
         podpis = podpis_firmy()
         WYD = replace(WYD, wydawca=podpis, autor=podpis,
-                      aktualizacje_folder=folder_aktualizacji_firmy())
+                      aktualizacje_folder=folder_aktualizacji_firmy(),
+                      kontakt_email=kontakt_firmy())
 
     if os.name != "nt":
         raise SystemExit("Budowanie działa tylko na Windows.")

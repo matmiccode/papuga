@@ -29,6 +29,7 @@ from typing import Iterable, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 PLIK_PODPISU = ROOT / "tools" / "podpis_firmy.local.txt"
+PLIK_KONTAKTU = ROOT / "tools" / "kontakt_firmy.local.txt"
 PLIK_ZAKAZANYCH = ROOT / "tools" / "zakazane.local.txt"
 
 
@@ -37,6 +38,11 @@ def slowa_zakazane(dodatkowe: Iterable[str]) -> List[str]:
     if PLIK_PODPISU.is_file():
         slowa += [s for s in PLIK_PODPISU.read_text(encoding="utf-8").split()
                   if s.upper() != "MATCODE" and len(s) >= 3]
+    if PLIK_KONTAKTU.is_file():
+        # Adres firmowy w całości i sama domena — żadne nie ma prawa trafić
+        # do paczki publicznej.
+        adres = PLIK_KONTAKTU.read_text(encoding="utf-8").strip()
+        slowa += [s for s in (adres, adres.rpartition("@")[2]) if len(s) >= 3]
     if PLIK_ZAKAZANYCH.is_file():
         slowa += [s.strip() for s in PLIK_ZAKAZANYCH.read_text(encoding="utf-8").splitlines()
                   if s.strip() and not s.startswith("#")]

@@ -43,6 +43,8 @@ assets/icon-sizes.png
 # Podpis wydania firmowego z imieniem i nazwiskiem — zostaje poza repozytorium
 tools/podpis_firmy.local.txt
 tools/aktualizacje_firmy.local.txt
+tools/kontakt_firmy.local.txt
+tools/kopia_wydan.local.txt
 
 # Spis licencji skladnikow - generowany przez tools/licencje.py przy budowie i publikacji
 LICENCJE.txt

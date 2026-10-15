@@ -16,10 +16,10 @@ from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
 
 from . import __version__, teksty
-from .core import doctor, download, media, nagrywanie, probe, update
+from .core import doctor, download, glosy, media, nagrywanie, probe, update, urzadzenia
 from .core.config import (
-    APP_ID, APP_NAME, LANGUAGES, WYDANIE, Settings, asset, default_output_dir, is_frozen,
-    models_dir, project_root,
+    APP_ID, APP_NAME, LANGUAGES, WYDANIE, Settings, asset, default_output_dir,
+    imie_uzytkownika, is_frozen, models_dir, project_root,
 )
 from .core.engine import Cancelled
 from .core.pipeline import (
@@ -32,17 +32,19 @@ APP_TITLE = APP_NAME
 
 from . import theme
 from .theme import (
-    ACCENT, ACCENT_HOVER, ACCENT_SOFT, BANER_BG, BG, BG_CARD, BG_DROP, BG_INPUT, BG_DROP_HOVER,
+    ACCENT, ACCENT_HOVER, ACCENT_SOFT, BANER_BG, BANER_OK_BG, BG, BG_CARD, BG_DROP, BG_INPUT,
+    BG_DROP_HOVER,
     BORDER_DROP, ERR_COLOR, FG, FG_DIM, FG_FAINT, LOG_BG, LOG_FG, OK_COLOR, WARN_COLOR,
 )
 
 #: Znak w kolumnie kolejki, którym usuwa się plik.
 USUN = "✕"
 
-#: Wiersze lewej kolumny okna: baner nowej wersji, karta nagrywania (tylko
-#: wydania z nagrywaniem), pole upuszczania, kolejka, dziennik. Panel
-#: ustawień po prawej rozciąga się na wszystkie.
-W_BANER, W_NAGRYWANIE, W_DROP, W_KOLEJKA, W_DZIENNIK = 0, 1, 2, 3, 4
+#: Wiersze lewej kolumny okna: baner nowej wersji, pasek „transkrypcja
+#: zakończona”, karta nagrywania (tylko wydania z nagrywaniem), pole
+#: upuszczania, kolejka, dziennik. Panel ustawień po prawej rozciąga się
+#: na wszystkie.
+W_BANER, W_WYNIK, W_NAGRYWANIE, W_DROP, W_KOLEJKA, W_DZIENNIK = 0, 1, 2, 3, 4, 5
 
 
 def _hms(sekundy: float) -> str:
@@ -54,6 +56,15 @@ def _hms(sekundy: float) -> str:
 
 def _skroc(tekst: str, limit: int = 42) -> str:
     return tekst if len(tekst) <= limit else tekst[: limit - 1] + "…"
+
+
+def _skroc_srodek(tekst: str, limit: int = 50) -> str:
+    """Skraca od środka: w nazwach urządzeń Windows marka stoi na końcu,
+    w nawiasie („… (Poly Blackwire 3320 Series)”) — ma zostać widoczna."""
+    if len(tekst) <= limit:
+        return tekst
+    przod = max(8, limit * 2 // 5)
+    return tekst[:przod] + "…" + tekst[-(limit - przod - 1):]
 
 
 def _tytul_okna() -> str:
@@ -407,14 +418,26 @@ class App:
 
         Wszystko poza diagnostyką i licencjami tylko wtedy, gdy wydanie to ma.
         """
-        linki = [(t("Diagnostyka"), self.show_diagnosis)]
+        from urllib.parse import quote
+
+        linki = []
+        kontakt = None
+        if WYDANIE.kontakt_email:
+            temat = quote(f"{APP_TITLE} {__version__}")
+            kontakt = lambda: webbrowser.open(  # noqa: E731
+                f"mailto:{WYDANIE.kontakt_email}?subject={temat}")
+        if kontakt and not WYDANIE.zgloszenia_url:
+            # Wydanie bez repozytorium (firmowe): zgłoszenia idą mailem do
+            # autora, więc odnośnik stoi tuż przy jego podpisie i mówi
+            # wprost, po co jest.
+            linki.append((t("Zgłoś błąd lub pomysł"), kontakt))
+        linki.append((t("Diagnostyka"), self.show_diagnosis))
         if WYDANIE.aktualizacje:
             linki.append((t("Sprawdź aktualizacje"), self.sprawdz_aktualizacje))
         if WYDANIE.zgloszenia_url:
             linki.append((t("Zgłoś problem"), lambda: webbrowser.open(WYDANIE.zgloszenia_url)))
-        if WYDANIE.kontakt_email:
-            linki.append((t("Kontakt"), lambda: webbrowser.open(
-                f"mailto:{WYDANIE.kontakt_email}?subject={APP_TITLE}%20{__version__}")))
+            if kontakt:
+                linki.append((t("Kontakt"), kontakt))
         linki.append((t("Licencje"), self.pokaz_licencje))
         if not linki:
             return
@@ -453,6 +476,57 @@ class App:
                        style="Accent.TButton" if i == 0 else "TButton").grid(
                 row=0, column=i, padx=(8 if i else 0, 0))
         self.baner.grid_remove()
+
+        # Pasek „Transkrypcja zakończona” — jedna linijka statusu na dole
+        # ginęła; koniec pracy ma być widoczny z drugiego końca pokoju,
+        # a gdy okno jest w tle, ma mignąć na pasku zadań.
+        self.baner_wynik = tk.Frame(parent, bg=BANER_OK_BG, padx=14, pady=10,
+                                    highlightthickness=1, highlightbackground=OK_COLOR)
+        self.baner_wynik.grid(row=W_WYNIK, column=0, sticky="ew", pady=(0, 12), padx=(0, 14))
+        self.baner_wynik.columnconfigure(1, weight=1)
+        self.baner_wynik_znak = tk.Label(self.baner_wynik, text="✓", bg=BANER_OK_BG,
+                                         fg=OK_COLOR, font=(theme.FONT_SEMI, 14))
+        self.baner_wynik_znak.grid(row=0, column=0, padx=(0, 10))
+        self.baner_wynik_tekst = tk.Label(self.baner_wynik, text="", bg=BANER_OK_BG, fg=FG,
+                                          font=(theme.FONT_SEMI, 10), anchor="w")
+        self.baner_wynik_tekst.grid(row=0, column=1, sticky="w")
+        ttk.Button(self.baner_wynik, text=t("Otwórz wyniki"), style="Accent.TButton",
+                   command=self.open_output).grid(row=0, column=2, padx=(12, 0))
+        ttk.Button(self.baner_wynik, text=t("OK"),
+                   command=self.baner_wynik.grid_remove).grid(row=0, column=3, padx=(8, 0))
+        self.baner_wynik.grid_remove()
+
+    def _pokaz_wynik(self, tekst: str, ok: bool) -> None:
+        kolor = OK_COLOR if ok else WARN_COLOR
+        self.baner_wynik.configure(highlightbackground=kolor)
+        self.baner_wynik_znak.configure(text="✓" if ok else "!", fg=kolor)
+        self.baner_wynik_tekst.configure(text=tekst)
+        self.baner_wynik.grid()
+        self._zwroc_uwage()
+
+    def _zwroc_uwage(self) -> None:
+        """Okno w tle: mignięcie na pasku zadań i dźwięk; na wierzchu — nic."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            hwnd = int(self.root.wm_frame(), 16)
+            if ctypes.windll.user32.GetForegroundWindow() == hwnd:
+                return
+
+            class FLASHWINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.UINT), ("hwnd", wintypes.HWND),
+                            ("dwFlags", wintypes.DWORD), ("uCount", wintypes.UINT),
+                            ("dwTimeout", wintypes.DWORD)]
+
+            # FLASHW_ALL | FLASHW_TIMERNOFG: miga, aż okno wróci na wierzch.
+            info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, 0x3 | 0xC, 0, 0)
+            ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
+            self.root.bell()
+        except Exception:
+            pass
 
     def _build_dropzone(self, parent) -> None:
         """Pole z przerywaną ramką — wygląda na miejsce, w które coś się kładzie."""
@@ -546,6 +620,13 @@ class App:
         self._nagranie_podpowiedziano = False
         self._po_pracy_transkrybuj = False
         self._okno_urzadzen = None
+        #: Co Windows wie o urządzeniach (typ, złącze, domyślne) — odświeżane
+        #: w tle, gdy nic się nie nagrywa (core/urzadzenia.py).
+        self._punkty: List[urzadzenia.PunktAudio] = []
+        self._odswiezam_punkty = False
+        #: Zestaw słuchawkowy, którego użytkownik nie chciał w tej sesji —
+        #: nie pytamy o niego drugi raz.
+        self._zestaw_odrzucony = ""
 
         karta = theme.karta(parent, row=W_NAGRYWANIE, column=0, sticky="ew",
                             pady=(0, 12), padx=(0, 14))
@@ -578,27 +659,76 @@ class App:
             pasek.grid(row=i, column=3, sticky="ew", pady=(6, 6) if i == 0 else (2, 2))
             self.rec_paski[klucz] = pasek
 
+        # W trakcie nagrania: pauza (przerwa, rozmowa prywatna — plik bez
+        # luki, licznik stoi) i „Zaznacz moment” (F8) — znacznik czasu, który
+        # po transkrypcji stoi w tekście tam, gdzie padło coś ważnego.
+        akcje = tk.Frame(wnetrze, bg=BG_CARD)
+        akcje.grid(row=2, column=3, sticky="e", pady=(8, 0))
+        self.rec_pauza_btn = ttk.Button(akcje, text=t("Pauza"), width=9, state="disabled",
+                                        command=self.przelacz_pauze)
+        self.rec_pauza_btn.pack(side="left")
+        self.rec_znacznik_btn = ttk.Button(akcje, text=t("⚑ Zaznacz (F8)"),
+                                           state="disabled", command=self.zaznacz_moment)
+        self.rec_znacznik_btn.pack(side="left", padx=(6, 0))
+        self.root.bind("<F8>", lambda _e: self.zaznacz_moment())
+
         # Źródła: cicha linia z odnośnikiem do zmiany.
         zrodla = tk.Frame(wnetrze, bg=BG_CARD)
-        zrodla.grid(row=2, column=0, columnspan=4, sticky="w", pady=(8, 0))
+        zrodla.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
         self.rec_zrodla = tk.Label(zrodla, text="", bg=BG_CARD, fg=FG_FAINT,
                                    font=(theme.FONT, 9), anchor="w")
         self.rec_zrodla.pack(side="left")
         self._link(zrodla, t("Zmień…"), self.wybierz_urzadzenia, tlo=BG_CARD).pack(
             side="left", padx=(8, 0))
         self._odswiez_zrodla()
+        self._odswiez_punkty()
 
     def _nagrywa(self) -> bool:
         nagrywarka = getattr(self, "nagrywarka", None)
         return nagrywarka is not None and nagrywarka.trwa
 
     def _odswiez_zrodla(self) -> None:
+        """Linia pod paskami: z czego naprawdę pójdzie nagranie, po ludzku.
+
+        Nazwa z ustawień (pusta = domyślne w Windows) spotyka się z tym, co
+        Windows wie o urządzeniu: „wbudowany”, „zestaw słuchawkowy USB”,
+        „monitor / telewizor (HDMI)”. Bez tej wiedzy zostaje sama nazwa.
+        """
         s = self.settings
-        mik = s.nagranie_mikrofon or t("domyślny")
-        system = s.nagranie_glosniki or t("domyślne urządzenie odtwarzania")
         self.rec_zrodla.configure(
             text=t("Mikrofon: {mik}  ·  Dźwięk spotkania z: {system}").format(
-                mik=_skroc(mik), system=_skroc(system)))
+                mik=self._opis_zrodla(s.nagranie_mikrofon, True),
+                system=self._opis_zrodla(s.nagranie_glosniki, False)))
+
+    def _opis_zrodla(self, nazwa: str, wejscie: bool) -> str:
+        p = urzadzenia.znajdz(self._punkty, nazwa, wejscie)
+        if p is None:
+            if nazwa and self._punkty:
+                return t("{nazwa} (odłączone — pójdzie domyślne)").format(nazwa=_skroc(nazwa, 30))
+            if nazwa:
+                return _skroc(nazwa)
+            return t("domyślny") if wejscie else t("domyślne urządzenie odtwarzania")
+        opis = urzadzenia.opis_rodzaju(p, krotko=True)
+        return opis or _skroc(p.nazwa)
+
+    def _odswiez_punkty(self) -> None:
+        """Co kilka sekund, w tle: lista urządzeń Windows do linii źródeł
+        i do pytania o zestaw słuchawkowy. W trakcie nagrania tory są już
+        otwarte, więc linia stoi."""
+        if not self._odswiezam_punkty and not self._nagrywa():
+            self._odswiezam_punkty = True
+            threading.Thread(
+                target=lambda: self.events.put(("urzadzenia_okno", urzadzenia.punkty())),
+                daemon=True).start()
+        self.root.after(5000, self._odswiez_punkty)
+
+    def _po_punktach(self, punkty) -> None:
+        self._odswiezam_punkty = False
+        if punkty != self._punkty:
+            self._punkty = punkty
+            # W trakcie nagrania listę przysyła wątek nagrywania (co 3 s),
+            # więc linia źródeł nadąża za przepiętym urządzeniem.
+            self._odswiez_zrodla()
 
     def przelacz_nagrywanie(self) -> None:
         if self._nagrywa():
@@ -612,6 +742,7 @@ class App:
     def rozpocznij_nagrywanie(self) -> None:
         settings = self._collect_settings()
         settings.save()
+        self._zaproponuj_zestaw(settings)
         put = self.events.put
         zdarzenia = nagrywanie.ZdarzeniaNagrywania(
             poziomy=lambda m, s: put(("nagranie_poziomy", m, s)),
@@ -620,6 +751,8 @@ class App:
             blad=lambda t: put(("nagranie_blad", t)),
             zakonczono=lambda p, s: put(("nagranie_koniec", str(p), s)),
             anulowano=lambda: put(("nagranie_anulowane",)),
+            pauza=lambda p: put(("nagranie_pauza", p)),
+            urzadzenia=lambda u: put(("urzadzenia_okno", u)),
         )
         try:
             plik = self.nagrywarka.start(
@@ -637,18 +770,57 @@ class App:
 
     def zatrzymaj_nagrywanie(self) -> None:
         self.rec_btn.configure(state="disabled", text=t("Zapisuję…"))
+        self.rec_pauza_btn.configure(state="disabled")
+        self.rec_znacznik_btn.configure(state="disabled")
         self.status_var.set(t("Kończę nagranie…"))
         self.nagrywarka.stop()
+
+    def przelacz_pauze(self) -> None:
+        if not self._nagrywa():
+            return
+        if self.nagrywarka.stan == self.nagrywarka.PAUZA:
+            self.nagrywarka.wznow()
+        elif self.nagrywarka.stan == self.nagrywarka.NAGRYWA:
+            self.nagrywarka.pauza()
+        self.rec_pauza_btn.configure(state="disabled")
+
+    def _po_pauzie(self, pauza: bool) -> None:
+        """Wątek roboczy potwierdził pauzę albo wznowienie."""
+        if not self._nagrywa():
+            return
+        self.rec_pauza_btn.configure(state="normal", text=t("Wznów") if pauza else t("Pauza"))
+        if pauza:
+            self.rec_kropka.configure(fg=FG_DIM)
+            self.status_var.set(t("Pauza — nagranie wstrzymane. „Wznów” nagrywa dalej do tego samego pliku."))
+            self.log(t("Pauza w nagraniu ({czas})").format(czas=_hms(self.nagrywarka.czas_trwania)))
+        else:
+            self.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
+            self.log(t("Nagranie wznowione."))
+            self._migaj_kropka()
+
+    def zaznacz_moment(self) -> None:
+        if not self._nagrywa():
+            return
+        wpis = self.nagrywarka.znacznik()
+        if wpis is None:
+            return
+        czas = _hms(wpis["czas"])
+        self.log(t("Znacznik {czas}").format(czas=czas))
+        self.status_var.set(t("Zaznaczono moment {czas} — w transkrypcji będzie ⚑.").format(czas=czas))
 
     def _ustaw_stan_nagrywania(self, nagrywa: bool) -> None:
         if nagrywa:
             self.rec_btn.configure(text=t("Zatrzymaj nagranie"), style="Stop.TButton",
                                    state="normal")
+            self.rec_pauza_btn.configure(state="normal", text=t("Pauza"))
+            self.rec_znacznik_btn.configure(state="normal")
             self.rec_czas.configure(fg=FG)
             self.start_btn.configure(state="disabled")
             self._migaj_kropka()
         else:
             self.rec_btn.configure(text=t("Nagrywaj spotkanie"), style="TButton", state="normal")
+            self.rec_pauza_btn.configure(state="disabled", text=t("Pauza"))
+            self.rec_znacznik_btn.configure(state="disabled")
             self.rec_czas.configure(text="0:00:00", fg=FG_DIM)
             self.rec_kropka.configure(fg=BG_CARD)
             for pasek in self.rec_paski.values():
@@ -659,6 +831,10 @@ class App:
     def _migaj_kropka(self) -> None:
         if not self._nagrywa():
             self.rec_kropka.configure(fg=BG_CARD)
+            return
+        if self.nagrywarka.stan == self.nagrywarka.PAUZA:
+            # W pauzie kropka stoi, przygaszona.
+            self.rec_kropka.configure(fg=FG_DIM)
             return
         self._nagranie_kropka = not self._nagranie_kropka
         self.rec_kropka.configure(fg=ERR_COLOR if self._nagranie_kropka else BG_CARD)
@@ -687,6 +863,8 @@ class App:
         self._nagranie_plik = None
         opis = media.format_duration(sekundy)
         self.log(t("Nagranie zapisane: {plik} ({czas}).").format(plik=plik.name, czas=opis))
+        if self.nagrywarka.znaczniki:
+            self.log(t("Zaznaczone momenty: {n}").format(n=len(self.nagrywarka.znaczniki)))
         for nazwa, st in self.nagrywarka.statystyki.items():
             if st["luki"] or st["korekty"] or st["odrzucone"] or st["wyprzedzenia"]:
                 self.log(t("  {tor}: luki {luki}, korekty dryfu {korekty}, "
@@ -703,6 +881,57 @@ class App:
         else:
             self.status_var.set(t("Nagranie zapisane ({czas}). Zaczynam transkrypcję…").format(czas=opis))
             self.root.after(300, lambda: self.start(tylko_nowe=True))
+
+    def _zaproponuj_zestaw(self, settings: Settings) -> None:
+        """Podłączony zestaw słuchawkowy (USB, Bluetooth, słuchawki), a nagranie
+        poszłoby z mikrofonu i głośników komputera — pytamy przed startem.
+
+        To był prawdziwy przypadek: mikrofon wbudowany wskazany kiedyś
+        z nazwy w „Zmień…” zostawał na stałe, choć do rozmowy podłączono
+        zestaw. „Tak” zapamiętuje zestaw w ustawieniach; gdy go nie będzie,
+        nagranie wróci do domyślnego (z wpisem w dzienniku). „Nie” — nie
+        pytamy o ten zestaw do końca sesji.
+        """
+        punkty = urzadzenia.punkty()
+        if punkty:
+            self._po_punktach(punkty)
+        mik, wy = urzadzenia.propozycja_zestawu(
+            punkty, settings.nagranie_mikrofon, settings.nagranie_glosniki)
+        if mik is None and wy is None:
+            return
+        zestaw = "\n".join(dict.fromkeys(p.nazwa for p in (mik, wy) if p is not None))
+        if zestaw == self._zestaw_odrzucony:
+            return
+        obecne = ", ".join(
+            self._opis_zrodla(nazwa, wejscie) for nazwa, wejscie, p in (
+                (settings.nagranie_mikrofon, True, mik), (settings.nagranie_glosniki, False, wy))
+            if p is not None)
+        pytanie = t("Podłączony jest zestaw słuchawkowy:\n{zestaw}\n\n"
+                    "Nagranie poszłoby z: {obecne}.\n\n"
+                    "Nagrywać przez zestaw słuchawkowy? Zapamiętam go w „Zmień…”."
+                    ).format(zestaw=zestaw, obecne=obecne)
+        if messagebox.askyesno(APP_TITLE, pytanie, parent=self.root):
+            if mik is not None:
+                settings.nagranie_mikrofon = mik.nazwa
+            if wy is not None:
+                settings.nagranie_glosniki = wy.nazwa
+            settings.save()
+            self.log(t("Nagranie przez zestaw słuchawkowy: {zestaw}").format(
+                zestaw=zestaw.replace("\n", ", ")))
+        else:
+            self._zestaw_odrzucony = zestaw
+        self._odswiez_zrodla()
+
+    def dodaj_moj_glos(self) -> None:
+        """Okno „Dodaj mój głos do bazy” (wydanie firmowe)."""
+        if self._nagrywa():
+            messagebox.showinfo(APP_TITLE, t("Próbkę głosu nagrasz po zatrzymaniu nagrania."),
+                                parent=self.root)
+            return
+        from . import glosy_okno
+
+        self._collect_settings()
+        glosy_okno.otworz(self.root, self.settings, log=self.log)
 
     def wybierz_urzadzenia(self) -> None:
         """Małe okno: mikrofon i urządzenie, z którego bierzemy dźwięk spotkania."""
@@ -722,9 +951,11 @@ class App:
         tresc.pack(fill="both", expand=True)
         tresc.columnconfigure(0, weight=1)
 
-        DOMYSLNE = t("Domyślne (ustawienie Windows)")
         WCZYTUJE = t("Wczytuję listę urządzeń…")
         pola = {}
+        #: Wpis na liście (nazwa + „co to jest”) → nazwa dla ustawień;
+        #: wpis „Domyślne…” → pusta nazwa.
+        mapa = {}
         opisy = (("mikrofon", t("Mikrofon")),
                  ("glosniki", t("Dźwięk spotkania z urządzenia (tego, na którym gra Teams)")))
         for i, (klucz, tekst) in enumerate(opisy):
@@ -732,22 +963,23 @@ class App:
                      anchor="w").grid(row=2 * i, column=0, sticky="w",
                                       pady=((0 if i == 0 else 12), 2))
             var = tk.StringVar(value=WCZYTUJE)
-            box = ttk.Combobox(tresc, textvariable=var, state="readonly", width=56)
+            box = ttk.Combobox(tresc, textvariable=var, state="readonly", width=86)
             box.grid(row=2 * i + 1, column=0, sticky="ew")
             pola[klucz] = (var, box)
         tk.Label(
             tresc, bg=BG, fg=FG_FAINT, font=(theme.FONT, 9), justify="left",
-            wraplength=440, anchor="w",
-            text=t("Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
+            wraplength=600, anchor="w",
+            text=t("Przy każdym urządzeniu stoi, co to jest: słuchawki, głośniki komputera, "
+                   "monitor, mikrofon wbudowany. „Używa Teams” to urządzenie, na którym "
+                   "Windows prowadzi rozmowy. Słuchawki na zwykłym jacku grają przez "
+                   "„głośniki komputera” — Windows ich nie odróżnia.\n\n"
+                   "Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
                    "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania."),
         ).grid(row=4, column=0, sticky="w", pady=(14, 0))
 
         def zapisz() -> None:
             for klucz, (var, _box) in pola.items():
-                wybor = var.get()
-                if wybor in (DOMYSLNE, WCZYTUJE) or wybor.startswith(t("Nie udało się odczytać urządzeń")) or not wybor:
-                    wybor = ""
-                setattr(self.settings, f"nagranie_{klucz}", wybor)
+                setattr(self.settings, f"nagranie_{klucz}", mapa.get(var.get(), ""))
             self.settings.save()
             self._odswiez_zrodla()
             okno.destroy()
@@ -763,34 +995,62 @@ class App:
         x = self.root.winfo_rootx() + (self.root.winfo_width() - okno.winfo_reqwidth()) // 2
         y = self.root.winfo_rooty() + 120
         okno.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        self._okno_urzadzen = (okno, pola, DOMYSLNE)
+        self._okno_urzadzen = (okno, pola, mapa)
 
         def wczytaj() -> None:
             try:
                 wejscia, wyjscia = nagrywanie.lista_urzadzen()
             except Exception as exc:
-                self.events.put(("nagranie_urzadzenia", None, None, str(exc)))
+                self.events.put(("nagranie_urzadzenia", None, None, str(exc), []))
                 return
             self.events.put(("nagranie_urzadzenia",
                              [u.nazwa for u in wejscia],
                              [u.nazwa for u in wyjscia if u.loopback_index is not None],
-                             ""))
+                             "", urzadzenia.punkty()))
 
         threading.Thread(target=wczytaj, daemon=True).start()
 
-    def _wypelnij_urzadzenia(self, wejscia, wyjscia, blad: str) -> None:
+    def _wypelnij_urzadzenia(self, wejscia, wyjscia, blad: str, punkty) -> None:
         if self._okno_urzadzen is None or not self._okno_urzadzen[0].winfo_exists():
             return
-        _okno, pola, DOMYSLNE = self._okno_urzadzen
+        _okno, pola, mapa = self._okno_urzadzen
         if blad:
             for var, box in pola.values():
                 var.set(t("Nie udało się odczytać urządzeń") + f": {blad[:60]}")
             return
-        for klucz, lista, zapisane in (("mikrofon", wejscia, self.settings.nagranie_mikrofon),
-                                       ("glosniki", wyjscia, self.settings.nagranie_glosniki)):
+        if punkty:
+            self._po_punktach(punkty)
+        DOMYSLNE = t("Domyślne (ustawienie Windows)")
+        mapa.clear()
+        for klucz, lista, zapisane, wejscie in (
+                ("mikrofon", wejscia, self.settings.nagranie_mikrofon, True),
+                ("glosniki", wyjscia, self.settings.nagranie_glosniki, False)):
             var, box = pola[klucz]
-            box.configure(values=[DOMYSLNE] + list(lista))
-            var.set(zapisane if zapisane in lista else DOMYSLNE)
+            # Nazwy daje PortAudio (te urządzenia da się otworzyć), a „co to
+            # jest” i kto jest domyślny — Windows; łączone po nazwie.
+            domyslne = urzadzenia.znajdz(punkty, "", wejscie)
+            wpis_dom = DOMYSLNE if domyslne is None else t("{domyslne} — teraz: {co}").format(
+                domyslne=DOMYSLNE,
+                co=urzadzenia.opis_rodzaju(domyslne) or _skroc_srodek(domyslne.nazwa))
+            mapa[wpis_dom] = ""
+            wpisy = [wpis_dom]
+            wybrany = wpis_dom
+            for nazwa in lista:
+                # Najpierw „co to jest”, potem nazwa techniczna (skrócona) —
+                # laik czyta początek wpisu, nie koniec.
+                p = urzadzenia.znajdz(punkty, nazwa, wejscie)
+                opis = urzadzenia.opis_rodzaju(p) if p is not None else ""
+                wpis = (f"{opis} — " if opis else "") + _skroc_srodek(nazwa)
+                if p is not None and p.domyslne:
+                    wpis += "  · " + t("domyślne w Windows")
+                if p is not None and p.komunikacyjne:
+                    wpis += "  · " + t("używa Teams")
+                mapa[wpis] = nazwa
+                wpisy.append(wpis)
+                if nazwa == zapisane:
+                    wybrany = wpis
+            box.configure(values=wpisy)
+            var.set(wybrany)
 
     def _odzyskaj_nagrania(self) -> None:
         """Po awarii: niedokończone nagrania z folderu wracają do kolejki."""
@@ -1013,11 +1273,29 @@ class App:
         # („Zmień…”), tu zostaje tylko to, co dzieje się po zatrzymaniu.
         if WYDANIE.nagrywanie:
             sekcja(15, t("Nagrywanie"))
+            # Lewy kanał własnego nagrania to mikrofon użytkownika — tak
+            # podpisze go transkrypcja, bez zgadywania.
+            ttk.Label(panel, text=t("Twoje imię w transkrypcji"),
+                      style="Card.Dim.TLabel").grid(row=16, column=0, sticky="w")
+            self.imie_var = tk.StringVar()
+            theme.pole(panel, self.imie_var, podpowiedz=t("np. Anna")).grid(
+                row=17, column=0, sticky="ew", ipady=5, pady=(2, 0))
             self.rec_auto_var = tk.BooleanVar(value=True)
             ttk.Checkbutton(
                 panel, text=t("Transkrybuj od razu po zatrzymaniu"),
                 variable=self.rec_auto_var, style="Card.TCheckbutton",
-            ).grid(row=16, column=0, sticky="w")
+            ).grid(row=18, column=0, sticky="w", pady=(8, 0))
+            if glosy.dostepna():
+                # Baza głosów firmy (core/glosy.py): dobrowolny, własny głos.
+                ttk.Button(panel, text=t("Dodaj mój głos do bazy…"),
+                           command=self.dodaj_moj_glos).grid(
+                    row=19, column=0, sticky="w", pady=(12, 0))
+                tk.Label(
+                    panel, bg=BG_CARD, fg=FG_DIM, font=(theme.FONT, 9), justify="left",
+                    anchor="w", wraplength=310,
+                    text=t("Dobrowolne. Pomaga wszystkim użytkownikom {app} w firmie: "
+                           "Twoje imię pojawi się w ich transkrypcjach samo.").format(app=APP_TITLE),
+                ).grid(row=20, column=0, sticky="w", pady=(4, 0))
 
     def _build_actions(self, parent) -> None:
         """Pasek na dole: postęp po lewej, przyciski po prawej."""
@@ -1111,6 +1389,7 @@ class App:
         self.outdir_var.set(s.output_dir or str(default_output_dir()))
         if WYDANIE.nagrywanie:
             self.rec_auto_var.set(s.nagranie_transkrybuj)
+            self.imie_var.set(s.nagranie_imie or imie_uzytkownika())
         self._pokaz_koniec_sciezki()
         self._toggle_outdir()
         self._toggle_diarize()
@@ -1146,6 +1425,7 @@ class App:
         s.output_dir = "" if s.output_next_to_source else self.outdir_var.get().strip()
         if WYDANIE.nagrywanie:
             s.nagranie_transkrybuj = bool(self.rec_auto_var.get())
+            s.nagranie_imie = self.imie_var.get().strip()
         s.normalize()
         return s
 
@@ -1310,6 +1590,7 @@ class App:
             )
             return
         settings.save()
+        self.baner_wynik.grid_remove()
 
         # Pliki, które już przeszły. Zmienione ustawienia (np. włączeni
         # mówcy) są powodem, żeby policzyć je jeszcze raz; samo dorzucenie
@@ -1726,8 +2007,12 @@ class App:
         elif kind == "nagranie_anulowane":
             self._ustaw_stan_nagrywania(False)
             self.status_var.set(t("Nagranie odrzucone — nic nie zostało zapisane."))
+        elif kind == "nagranie_pauza":
+            self._po_pauzie(bool(event[1]))
         elif kind == "nagranie_urzadzenia":
-            self._wypelnij_urzadzenia(event[1], event[2], event[3])
+            self._wypelnij_urzadzenia(event[1], event[2], event[3], event[4])
+        elif kind == "urzadzenia_okno":
+            self._po_punktach(event[1])
         elif kind == "nagranie_odzyskane":
             self._po_odzyskaniu(event[1], event[2])
         elif kind == "done":
@@ -1807,9 +2092,14 @@ class App:
             self.status_var.set(t("Przerwano. Ukończono {pliki}.").format(pliki=_liczba_plikow(done)))
         elif failed:
             self.status_var.set(t("Zakończono: {ok} OK, {zle} z błędem.").format(ok=done, zle=failed))
+            self._pokaz_wynik(t("Zakończono z błędami: {ok} OK, {zle} z błędem — "
+                                "szczegóły w dzienniku.").format(ok=done, zle=failed), ok=False)
         else:
             self.status_var.set(t("Gotowe — przetworzono {pliki}.").format(pliki=_liczba_plikow(done)))
             self.overall_progress["value"] = 1000
+            if done:
+                self._pokaz_wynik(t("Transkrypcja zakończona — {pliki} w folderze wyników.")
+                                  .format(pliki=_liczba_plikow(done)), ok=True)
 
         self.log(self.status_var.get())
 

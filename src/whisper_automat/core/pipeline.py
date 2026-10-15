@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
-from . import diarization, download, media, probe, writers
-from .config import Settings, models_dir, work_dir
+from . import diarization, download, glosy, media, nagrywanie, probe, writers
+from .config import Settings, imie_uzytkownika, models_dir, work_dir
 from .engine import (
     Cancelled,
     EngineError,
@@ -207,30 +207,69 @@ class Runner:
     def _waga_tekstu(self) -> float:
         return DIAR_TRANSCRIBE_WEIGHT if self.settings.diarize else TRANSCRIBE_WEIGHT
 
-    def _rozpoznaj_mowcow(self, audio: Path, result, index: int, total: int) -> None:
+    def _wlasne_nagranie(self, info) -> bool:
+        """Czy plik nagrał ten program (stereo z tagiem — nagrywanie.py)."""
+        return (getattr(info, "channels", 0) == 2
+                and diarization.tag_nagrania(getattr(info, "tags", None)) is not None)
+
+    def _rozpoznaj_mowcow(self, audio: Path, result, index: int, total: int,
+                          source: Optional[Path] = None, info=None,
+                          tymczasowe: Optional[list] = None) -> None:
         """Dokłada wynikowi informację, kto mówi w którym momencie.
+
+        Własne nagranie spotkania (stereo z tagiem): diaryzacja idzie tylko
+        po prawym kanale (rozmówcy), a użytkownik dostaje numer `result.ja`
+        z porównania kanałów — bez zgadywania. Pole „Ile osób” liczy
+        wszystkich razem z użytkownikiem.
 
         Niepowodzenie nie przekreśla całej pracy — transkrypcja jest już
         gotowa i zostanie zapisana, tyle że bez podziału na mówców.
         """
         zadane = self.settings.speakers
+        wlasne = source is not None and info is not None and self._wlasne_nagranie(info)
+        stereo: Optional[Path] = None
+        if wlasne:
+            self.cb.status(t("[{i}/{n}] Rozdzielam kanały nagrania…").format(
+                i=index + 1, n=total))
+            try:
+                prawy = media.extract_audio(
+                    source, dst=work_dir() / f"{source.stem}.prawy.16k.wav",
+                    kanal="prawy", cancel=self.cb.cancelled)
+                stereo = media.extract_audio(
+                    source, dst=work_dir() / f"{source.stem}.stereo.16k.wav",
+                    kanal="stereo", cancel=self.cb.cancelled)
+            except media.MediaError as exc:
+                self.cb.log(t("Nie udało się rozdzielić kanałów nagrania: {blad}").format(blad=exc))
+                self.cb.log(t("Transkrypcja zostanie zapisana bez podziału na osoby."))
+                return
+            if tymczasowe is not None:
+                tymczasowe.extend([prawy, stereo])
+            audio = prawy
+            # Jedna osoba to użytkownik; reszta jest w torze rozmówców.
+            ilu = max(zadane - 1, 1) if zadane else 0
+            self.cb.log(t("Własne nagranie: lewy kanał to Ty, rozmówców szukam w prawym "
+                          "({opis}).").format(
+                opis=t("Ty + {n} rozm.").format(n=ilu) if ilu
+                else t("liczba osób nie podana — algorytm zgaduje.")))
+        else:
+            ilu = zadane
+            self.cb.log(
+                t("Rozpoznawanie mówców: {opis}").format(
+                    opis=t("szukam {n} różnych głosów.").format(n=zadane) if zadane
+                    else t("liczba osób nie podana — algorytm zgaduje.")
+                )
+            )
         ile = t("{n} os.").format(n=zadane) if zadane else t("liczba nieznana")
         self.cb.status(
             t("[{i}/{n}] Rozpoznaję mówców ({ile})…").format(
                 i=index + 1, n=total, ile=ile
             )
         )
-        self.cb.log(
-            t("Rozpoznawanie mówców: {opis}").format(
-                opis=t("szukam {n} różnych głosów.").format(n=zadane) if zadane
-                else t("liczba osób nie podana — algorytm zgaduje.")
-            )
-        )
         baza = self._waga_audio + self._waga_tekstu
         try:
             odcinki = diarization.rozpoznaj_mowcow(
                 audio,
-                ilu_mowcow=self.settings.speakers,
+                ilu_mowcow=ilu,
                 on_progress=lambda f: self.cb.file_progress(
                     baza + f * DIAR_SPEAKERS_WEIGHT
                 ),
@@ -240,6 +279,24 @@ class Runner:
             self.cb.log(t("Nie rozpoznano mówców: {blad}").format(blad=exc))
             self.cb.log(t("Transkrypcja zostanie zapisana bez podziału na osoby."))
             return
+
+        if wlasne and stereo is not None:
+            ja = len({o.mowca for o in odcinki})
+            try:
+                odcinki_ja = diarization.odcinki_wlasne(stereo, result.segments, ja)
+            except diarization.DiarizationError as exc:
+                self.cb.log(t("Nie udało się rozpoznać Twojego toru: {blad}").format(blad=exc))
+                odcinki_ja = []
+            if not odcinki:
+                self.cb.log(t("Nie wykryto rozmówców w torze spotkania — podpisuję tylko Ciebie."))
+            if not odcinki_ja:
+                self.cb.log(t("W torze mikrofonu nie wykryto Twojej mowy."))
+            result.ja = ja
+            result.speaker_names[ja] = (self.settings.nagranie_imie.strip()
+                                        or imie_uzytkownika() or t("Ja"))
+            # Odcinki „Ja” pierwsze: są dokładnie po słowach i mają wygrywać
+            # z przybliżonymi odcinkami diaryzacji przy równym pokryciu.
+            odcinki = odcinki_ja + odcinki
 
         if not odcinki:
             self.cb.log(t("Nie wykryto wyraźnie oddzielonych głosów."))
@@ -266,6 +323,10 @@ class Runner:
                 glosy=len(rozpoznani), odcinki=len(odcinki)
             )
         )
+        if wlasne and result.ja not in z_tekstem:
+            # Użytkownik bez ani jednego słowa w tekście nie ma czego podpisać.
+            result.speaker_names.pop(result.ja, None)
+            result.ja = -1
         if zadane and len(rozpoznani) != zadane:
             self.cb.log(
                 t(
@@ -282,6 +343,19 @@ class Runner:
                 ).format(n=len(z_tekstem))
             )
 
+        # Baza głosów (wydanie firmowe): kto wpisał swój głos, dostaje imię
+        # jako podpowiedź. Nic nie jest zapisywane — tylko porównanie.
+        if glosy.dostepna() and z_tekstem - {result.ja}:
+            self.cb.status(t("[{i}/{n}] Porównuję głosy z bazą…").format(i=index + 1, n=total))
+            try:
+                result.speaker_proposals = glosy.rozpoznaj_mowcow(
+                    audio, [o for o in odcinki if o.mowca != result.ja and o.mowca in z_tekstem],
+                    log=self.cb.log)
+            except glosy.BladBazy as exc:
+                self.cb.log(t("Baza głosów: {blad}").format(blad=exc))
+            except Exception as exc:  # noqa: BLE001 — podpowiedź nie może wywrócić pracy
+                self.cb.log(t("Baza głosów: {blad}").format(blad=f"{type(exc).__name__}: {exc}"))
+
         # Imiona pytamy zanim zapiszemy pliki — inaczej trzeba by je
         # nadpisywać, a numeracja mówców i tak jest inna w każdym nagraniu.
         try:
@@ -289,7 +363,12 @@ class Runner:
         except Exception as exc:
             self.cb.log(t("Nie udało się zapytać o imiona: {blad}").format(blad=exc))
             nazwy = {}
+        if not nazwy and result.speaker_proposals:
+            # Bez okna (konsola) albo „Pomiń” — rozpoznani z bazy i tak są podpisani.
+            nazwy = {numer: imie for numer, (imie, _ocena) in result.speaker_proposals.items()}
         if nazwy:
+            if result.ja >= 0 and result.ja in result.speaker_names:
+                nazwy = {**nazwy, result.ja: result.speaker_names[result.ja]}
             result.speaker_names = nazwy
             self.cb.log(
                 t("Podpisano mówców: {imiona}").format(
@@ -314,6 +393,8 @@ class Runner:
     def _run_one(self, source: Path, index: int, total: int) -> JobResult:
         job = JobResult(source=source)
         temp_audio: Optional[Path] = None
+        #: Pliki pomocnicze rozpoznawania mówców (tory własnego nagrania).
+        tymczasowe: list = []
         is_temp = False
 
         try:
@@ -377,7 +458,14 @@ class Runner:
             )
 
             if self.settings.diarize:
-                self._rozpoznaj_mowcow(audio, result, index, total)
+                self._rozpoznaj_mowcow(audio, result, index, total,
+                                       source=source, info=info, tymczasowe=tymczasowe)
+
+            # Zaznaczone momenty z nagrania (przycisk „Zaznacz moment”) leżą
+            # obok pliku — trafiają do TXT i JSON w swoim miejscu.
+            result.znaczniki = nagrywanie.wczytaj_znaczniki(source)
+            if result.znaczniki:
+                self.cb.log(t("Zaznaczone momenty: {n}").format(n=len(result.znaczniki)))
 
             out_dir = self.settings.resolve_output_dir(source)
             job.outputs = writers.write_all(
@@ -408,8 +496,9 @@ class Runner:
             )
             self.cb.log(traceback.format_exc(limit=3))
         finally:
-            if temp_audio and not self.settings.keep_extracted_audio:
-                _cleanup(temp_audio)
+            if not self.settings.keep_extracted_audio:
+                for plik in ([temp_audio] if temp_audio else []) + tymczasowe:
+                    _cleanup(plik)
 
         return job
 

@@ -44,6 +44,7 @@ WYD = WYDANIA["papuga"]
 KLON = ROOT.parent / "papuga"
 WYKLUCZONE = ["PROGRESS.md", "INSTRUKCJA.txt", "README.md", "publikacja"]
 PLIK_PODPISU = ROOT / "tools" / "podpis_firmy.local.txt"
+PLIK_KONTAKTU = ROOT / "tools" / "kontakt_firmy.local.txt"
 BINARNE = {".png", ".ico", ".onnx", ".bin", ".exe", ".dll", ".pyd", ".zip", ".jpg", ".woff2"}
 
 
@@ -95,6 +96,9 @@ def zakazane_slowa(dodatkowe: Path | None) -> List[str]:
     if PLIK_PODPISU.is_file():
         slowa += [s for s in PLIK_PODPISU.read_text(encoding="utf-8").split()
                   if s.upper() != "MATCODE" and len(s) >= 3]
+    if PLIK_KONTAKTU.is_file():
+        adres = PLIK_KONTAKTU.read_text(encoding="utf-8").strip()
+        slowa += [s for s in (adres, adres.rpartition("@")[2]) if len(s) >= 3]
     if dodatkowe and dodatkowe.is_file():
         slowa += [s.strip() for s in dodatkowe.read_text(encoding="utf-8").splitlines()
                   if s.strip()]

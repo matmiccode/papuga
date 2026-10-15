@@ -79,6 +79,16 @@ class TranscriptionResult:
     #: rozpoznanych głosów: osoba wtrącająca krótkie zdania może nie
     #: wygrać żadnego segmentu tekstu, a wciąż ma zostać nazwana.
     speaker_turns: list = field(default_factory=list)
+    #: Własne nagranie spotkania: numer mówcy, którym jest użytkownik
+    #: (lewy kanał — mikrofon). -1 = zwykły plik, nikt nie jest „Ja”.
+    ja: int = -1
+    #: Zaznaczone momenty z nagrania (`<plik>.znaczniki.json`):
+    #: lista słowników {"czas": sekundy, "opis": tekst}.
+    znaczniki: list = field(default_factory=list)
+    #: Podpowiedzi z bazy głosów (wydanie firmowe, core/glosy.py):
+    #: numer mówcy -> (imię, podobieństwo 0–1). Okno „Kto jest kim?”
+    #: wpisuje je w pola; bez okna (konsola) trafiają do podpisów same.
+    speaker_proposals: dict = field(default_factory=dict)
 
     @property
     def has_speakers(self) -> bool:

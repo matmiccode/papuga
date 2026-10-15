@@ -7,9 +7,9 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from ..teksty import t
 from .probe import find_ffmpeg
@@ -45,6 +45,11 @@ class MediaInfo:
     has_video: bool = False
     audio_codec: str = ""
     size_bytes: int = 0
+    #: Liczba kanałów pierwszej ścieżki audio (0 = nieznana).
+    channels: int = 0
+    #: Tagi kontenera (`format.tags` z ffprobe), klucze małymi literami.
+    #: Własne nagrania spotkań mają tu `whisper_automat` (nagrywanie.TAG).
+    tags: Dict[str, str] = field(default_factory=dict)
 
     @property
     def is_video(self) -> bool:
@@ -120,10 +125,18 @@ def probe_media(path) -> MediaInfo:
             info.duration = float(duration)
         except ValueError:
             pass
+    tags = data.get("format", {}).get("tags") or {}
+    if isinstance(tags, dict):
+        info.tags = {str(k).lower(): str(v) for k, v in tags.items()}
 
     for stream in data.get("streams", []):
         kind = stream.get("codec_type")
         if kind == "audio":
+            if not info.has_audio:
+                try:
+                    info.channels = int(stream.get("channels") or 0)
+                except (TypeError, ValueError):
+                    info.channels = 0
             info.has_audio = True
             info.audio_codec = info.audio_codec or stream.get("codec_name", "")
             if not info.duration and stream.get("duration"):
@@ -149,14 +162,27 @@ def probe_media(path) -> MediaInfo:
 _TIME_RE = re.compile(r"out_time_(?:us|ms)=(\d+)")
 
 
+#: Wybór kanału w `extract_audio`: domyślnie miks do mono (średnia L+R —
+#: dla Whispera poziom nie ma znaczenia), `lewy`/`prawy` to sam jeden tor
+#: własnego nagrania (mikrofon / rozmówcy), `stereo` zostawia oba kanały.
+KANALY = {
+    None: ["-ac", str(TARGET_CHANNELS)],
+    "mono": ["-ac", str(TARGET_CHANNELS)],
+    "lewy": ["-af", "pan=mono|c0=c0"],
+    "prawy": ["-af", "pan=mono|c0=c1"],
+    "stereo": ["-ac", "2"],
+}
+
+
 def extract_audio(
     src,
     dst: Optional[Path] = None,
     duration: float = 0.0,
     on_progress: Optional[Callable[[float], None]] = None,
     cancel: Optional[Callable[[], bool]] = None,
+    kanal: Optional[str] = None,
 ) -> Path:
-    """Wyciąga ścieżkę audio do WAV 16 kHz mono.
+    """Wyciąga ścieżkę audio do WAV 16 kHz (mono, chyba że `kanal`, patrz KANALY).
 
     Zwraca ścieżkę pliku wynikowego. `on_progress` dostaje ułamek 0.0-1.0.
     """
@@ -166,6 +192,8 @@ def extract_audio(
         dst = tmp_dir / (src.stem + ".wav")
     dst = Path(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
+    if kanal not in KANALY:
+        raise MediaError(t("Nieznany kanał: {kanal}").format(kanal=kanal))
 
     cmd = [
         _ffmpeg_bin(),
@@ -177,7 +205,7 @@ def extract_audio(
         "-sn",                      # bez napisów
         "-dn",                      # bez danych
         "-map", "0:a:0",            # pierwsza ścieżka audio
-        "-ac", str(TARGET_CHANNELS),
+        *KANALY[kanal],
         "-ar", str(TARGET_RATE),
         "-c:a", "pcm_s16le",
         "-progress", "pipe:1",

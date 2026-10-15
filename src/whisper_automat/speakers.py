@@ -71,8 +71,10 @@ def _probki_mowcow(result) -> List[Tuple[int, float, float]]:
     w krótkich odcinkach częściej trafia się urwane słowo albo dwa głosy
     naraz. Bez odcinków zostają segmenty tekstu.
     """
+    ja = getattr(result, "ja", -1)
     z_tekstem = {
-        s.speaker for s in result.segments if getattr(s, "speaker", -1) >= 0
+        s.speaker for s in result.segments
+        if getattr(s, "speaker", -1) >= 0 and s.speaker != ja
     }
     if not z_tekstem:
         return []
@@ -180,17 +182,27 @@ class SpeakerDialog:
             text=t("{plik} — rozpoznane głosy: {n}").format(
                 plik=self.result.source.name, n=len(self._probki)),
             style="Status.TLabel",
-        ).grid(row=0, column=0, columnspan=3, sticky="w")
+        ).grid(row=0, column=0, columnspan=4, sticky="w")
 
         ttk.Label(
             ramka,
             text=t("Posłuchaj próbki i wpisz imię. Puste pole zostawia "
                    "oznaczenie MÓWCA 1, MÓWCA 2…"),
             style="Dim.TLabel",
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(2, 14))
+        ).grid(row=1, column=0, columnspan=4, sticky="w", pady=(2, 14))
+
+        ja = getattr(self.result, "ja", -1)
+        if ja >= 0:
+            # Użytkownik nie jest zgadywany: to lewy kanał własnego nagrania.
+            imie = (getattr(self.result, "speaker_names", None) or {}).get(ja) or t("Ja")
+            ttk.Label(ramka, text=t("Ty: {imie}").format(imie=imie)).grid(
+                row=2, column=0, sticky="w", pady=4, padx=(0, 10))
+            ttk.Label(ramka, style="Dim.TLabel",
+                      text=t("Twój mikrofon — bez pytania. Imię zmienisz w ustawieniach.")
+                      ).grid(row=2, column=1, columnspan=2, sticky="w")
 
         for i, (numer, start, _dlugosc) in enumerate(self._probki):
-            wiersz = 2 + i
+            wiersz = 3 + i
             ttk.Label(ramka, text=t("MÓWCA {n}").format(n=numer + 1)).grid(
                 row=wiersz, column=0, sticky="w", pady=4, padx=(0, 10)
             )
@@ -200,7 +212,8 @@ class SpeakerDialog:
                 command=lambda n=numer: self._odtworz(n),
             ).grid(row=wiersz, column=1, sticky="w", padx=(0, 10))
 
-            zmienna = tk.StringVar()
+            podpowiedz = (getattr(self.result, "speaker_proposals", None) or {}).get(numer)
+            zmienna = tk.StringVar(value=podpowiedz[0] if podpowiedz else "")
             self._pola[numer] = zmienna
             pole = tk.Entry(
                 ramka,
@@ -213,10 +226,15 @@ class SpeakerDialog:
                 width=28,
             )
             pole.grid(row=wiersz, column=2, sticky="ew", ipady=4, pady=4)
+            if podpowiedz:
+                # Z bazy głosów firmy — imię już wpisane, można poprawić.
+                ttk.Label(ramka, style="Dim.TLabel",
+                          text=t("z bazy głosów · {p:.0%}").format(p=podpowiedz[1])).grid(
+                    row=wiersz, column=3, sticky="w", padx=(8, 0))
             if i == 0:
                 pole.focus_set()
 
-        wiersz_statusu = 2 + len(self._probki)
+        wiersz_statusu = 3 + len(self._probki)
         self.status = tk.Label(
             ramka,
             text="",

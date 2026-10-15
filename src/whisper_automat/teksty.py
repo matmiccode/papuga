@@ -109,6 +109,7 @@ EN = {
     "Sprawdź aktualizacje": "Check for updates",
     "Zgłoś problem": "Report a problem",
     "Kontakt": "Contact",
+    "Zgłoś błąd lub pomysł": "Report a bug or an idea",
     "Licencje": "Licenses",
     "Zaktualizuj teraz": "Update now",
     "Co nowego": "What's new",
@@ -158,10 +159,45 @@ EN = {
     "Wczytuję listę urządzeń…": "Loading the device list…",
     "Dźwięk spotkania z urządzenia (tego, na którym gra Teams)":
         "Meeting audio from the device (the one Teams plays to)",
-    "Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców drugi "
-        "raz, z opóźnieniem. Zmiany działają od następnego nagrania.":
+    "Przy każdym urządzeniu stoi, co to jest: słuchawki, głośniki komputera, "
+        "monitor, mikrofon wbudowany. „Używa Teams” to urządzenie, na którym "
+        "Windows prowadzi rozmowy. Słuchawki na zwykłym jacku grają przez "
+        "„głośniki komputera” — Windows ich nie odróżnia.\n\n"
+        "Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
+        "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania.":
+        "Next to each device you can see what it is: headphones, computer speakers, "
+        "a monitor, the built-in microphone. “Used by Teams” is the device Windows "
+        "uses for calls. Headphones on a plain jack play through the “computer "
+        "speakers” — Windows cannot tell them apart.\n\n"
         "Headphones work best: with speakers the microphone picks up the other "
         "people a second time, delayed. Changes apply from the next recording.",
+    "{domyslne} — teraz: {co}": "{domyslne} — now: {co}",
+    "domyślne w Windows": "Windows default",
+    "używa Teams": "used by Teams",
+    "{nazwa} (odłączone — pójdzie domyślne)": "{nazwa} (unplugged — the default will be used)",
+    "Podłączony jest zestaw słuchawkowy:\n{zestaw}\n\n"
+        "Nagranie poszłoby z: {obecne}.\n\n"
+        "Nagrywać przez zestaw słuchawkowy? Zapamiętam go w „Zmień…”.":
+        "A headset is connected:\n{zestaw}\n\n"
+        "The recording would use: {obecne}.\n\n"
+        "Record through the headset? It will be remembered under “Change…”.",
+    "Nagranie przez zestaw słuchawkowy: {zestaw}": "Recording through the headset: {zestaw}",
+    # core/urzadzenia.py — co to za urządzenie
+    "USB": "USB",
+    "Bluetooth": "Bluetooth",
+    "monitor / telewizor (HDMI)": "monitor / TV (HDMI)",
+    "zestaw słuchawkowy": "headset",
+    "mikrofon zestawu słuchawkowego": "headset microphone",
+    "słuchawki": "headphones",
+    "mikrofon słuchawek": "headphones microphone",
+    "głośniki komputera": "computer speakers",
+    "głośniki": "speakers",
+    "wbudowany": "built-in",
+    "mikrofon wbudowany": "built-in microphone",
+    "mikrofon": "microphone",
+    "wejście liniowe": "line in",
+    "wyjście liniowe": "line out",
+    "wyjście cyfrowe": "digital output",
     "Anuluj": "Cancel",
     "Zapisz": "Save",
     "Nie udało się odczytać urządzeń": "Could not read the devices",
@@ -304,6 +340,11 @@ EN = {
     "Zakończono: {ok} OK, {zle} z błędem.":
         "Finished: {ok} OK, {zle} with errors.",
     "Gotowe — przetworzono {pliki}.": "Done — processed {pliki}.",
+    "Transkrypcja zakończona — {pliki} w folderze wyników.":
+        "Transcription finished — {pliki} in the output folder.",
+    "Zakończono z błędami: {ok} OK, {zle} z błędem — szczegóły w dzienniku.":
+        "Finished with errors: {ok} OK, {zle} failed — see the log.",
+    "OK": "OK",
     "Gdzie zapisywać transkrypcje?": "Where to save transcripts?",
     "Folder nie istnieje: {folder}": "The folder does not exist: {folder}",
     "Jak to działa — {app}": "How it works — {app}",
@@ -835,4 +876,118 @@ EN = {
         "No audio or video file was given.",
     "Gotowe: {ok} / {n}": "Done: {ok} / {n}",
     "BŁĄD {plik}: {blad}": "ERROR {plik}: {blad}",
+    'Twoje imię w transkrypcji': 'Your name in the transcript',
+    'np. Anna': 'e.g. Anna',
+    'Ja': 'Me',
+    'Twój mikrofon — bez pytania. Imię zmienisz w ustawieniach.':
+        'Your microphone — no guessing. Change the name in the settings.',
+    'Ty: {imie}': 'You: {imie}',
+    'Oczekiwano 16-bitowego WAV stereo — plik nie przeszedł konwersji.':
+        'Expected a 16-bit stereo WAV — the file did not go through conversion.',
+    'Nieznany kanał: {kanal}': 'Unknown channel: {kanal}',
+    'Nie wykryto rozmówców w torze spotkania — podpisuję tylko Ciebie.':
+        'No other speakers detected in the meeting track — only you get a label.',
+    'W torze mikrofonu nie wykryto Twojej mowy.':
+        'No speech of yours was detected in the microphone track.',
+    '[{i}/{n}] Rozdzielam kanały nagrania…':
+        '[{i}/{n}] Splitting the recording channels…',
+    'Własne nagranie: lewy kanał to Ty, rozmówców szukam w prawym ({opis}).':
+        'Own recording: the left channel is you, looking for the others in the right one ({opis}).',
+    'Nie udało się rozdzielić kanałów nagrania: {blad}':
+        'Could not split the recording channels: {blad}',
+    'Nie udało się rozpoznać Twojego toru: {blad}':
+        'Could not analyse your track: {blad}',
+    'Ty + {n} rozm.': 'you + {n} others',
+    'Pauza': 'Pause',
+    'Wznów': 'Resume',
+    '⚑ Zaznacz (F8)': '⚑ Mark (F8)',
+    'Pauza — nagranie wstrzymane. „Wznów” nagrywa dalej do tego samego pliku.':
+        'Paused — recording on hold. “Resume” continues into the same file.',
+    'Nagranie wznowione.': 'Recording resumed.',
+    'Znacznik {czas}': 'Marker {czas}',
+    'Zaznaczono moment {czas} — w transkrypcji będzie ⚑.':
+        'Moment {czas} marked — it will show up as ⚑ in the transcript.',
+    'Pauza w nagraniu ({czas})': 'Recording paused ({czas})',
+    'Zaznaczone momenty: {n}': 'Marked moments: {n}',
+    'Po pauzie nie ma z czego nagrywać.':
+        'Nothing left to record from after the pause.',
+    'Nie udało się zapisać zaznaczonych momentów: {blad}':
+        'Could not save the marked moments: {blad}',
+    '{kto} nie dał się otworzyć po pauzie — nagrywam dalej bez niego.':
+        '{kto} could not be reopened after the pause — recording continues without it.',
+    'zaznaczony moment': 'marked moment',
+    '{kto} przełączony na: {urzadzenie}':
+        '{kto} switched to: {urzadzenie}',
+    'Próbkę głosu nagrasz po zatrzymaniu nagrania.':
+        'Record the voice sample after stopping the recording.',
+    'Dodaj mój głos do bazy…': 'Add my voice to the database…',
+    'Dobrowolne. Pomaga wszystkim użytkownikom {app} w firmie: Twoje imię pojawi się w ich transkrypcjach samo.':
+        'Voluntary. Helps every {app} user in the company: your name will show up in their transcripts by itself.',
+    'Dzień dobry, nazywam się … i pracuję w dziale … . Dziś omówimy plan na najbliższy kwartał: terminy dostaw, nowy cennik oraz przygotowania do targów. Proszę o uwagi do protokołu z ostatniego spotkania. Jeśli coś jest niejasne, pytajcie śmiało, chętnie wyjaśnię. Na koniec ustalimy, kto odpowiada za kolejne kroki i do kiedy.':
+        'Good morning, my name is … and I work in the … department. Today we will go through the plan for the coming quarter: delivery dates, the new price list and preparations for the trade fair. Please send me your comments on the minutes from the last meeting. If anything is unclear, just ask, I will gladly explain. At the end we will agree who is responsible for the next steps and by when.',
+    'Dodaj mój głos do bazy': 'Add my voice to the database',
+    'Nagrywam. Czytaj tekst powyżej…':
+        'Recording. Read the text above…',
+    'Głos usunięty z bazy firmowej.':
+        'Voice removed from the company database.',
+    'Usunięto. Twój głos nie będzie już rozpoznawany.':
+        'Removed. Your voice will no longer be recognised.',
+    'Sprawdzam bazę…': 'Checking the database…',
+    'Usuń mój głos': 'Remove my voice',
+    'Zapisz do bazy': 'Save to the database',
+    'Nagrywam…': 'Recording…',
+    'Liczę odcisk głosu…': 'Computing the voiceprint…',
+    'Wpisz imię — tak podpisze Cię transkrypcja.':
+        'Enter your name — that is how the transcript will label you.',
+    'Usunąć Twój głos z bazy firmowej?':
+        'Remove your voice from the company database?',
+    'W bazie firmowej: {n} głos(ów). Twój głos jest zapisany ({data}) jako „{imie}” — nowa próbka go zastąpi.':
+        'Company database: {n} voice(s). Your voice is stored ({data}) as “{imie}” — a new sample will replace it.',
+    'W bazie firmowej: {n} głos(ów). Twojego głosu jeszcze nie ma.':
+        'Company database: {n} voice(s). Your voice is not there yet.',
+    'Próbka gotowa: {s:.0f} s mowy. Sprawdź imię i kliknij „Zapisz do bazy”.':
+        'Sample ready: {s:.0f} s of speech. Check the name and click “Save to the database”.',
+    'Głos zapisany w bazie firmowej jako „{imie}” ({plik}).':
+        'Voice saved in the company database as “{imie}” ({plik}).',
+    'Zapisano. Od teraz w transkrypcjach kolegów będziesz „{imie}”.':
+        "Saved. From now on you will be “{imie}” in your colleagues' transcripts.",
+    'Imię i nazwisko w transkrypcjach': 'Name in the transcripts',
+    'Przeczytaj na głos, zwyczajnie, jak na spotkaniu (około 25 s):':
+        'Read aloud, naturally, as in a meeting (about 25 s):',
+    'Nagraj próbkę ({s} s)': 'Record a sample ({s} s)',
+    'Baza niedostępna: {blad}': 'Database unavailable: {blad}',
+    'Nagranie próbki przerwane.': 'Sample recording interrupted.',
+    'Udział jest dobrowolny i można go w każdej chwili cofnąć przyciskiem „Usuń mój głos”. Pomaga wszystkim użytkownikom {app} w firmie: gdy weźmiesz udział w nagrywanym spotkaniu, Twoje imię pojawi się w ich transkrypcji samo, zamiast „MÓWCA 2”.\n\nDo bazy trafia odcisk głosu (zestaw liczb opisujących brzmienie, nie nagranie), Twoje imię, login i data. Baza leży w folderze firmowym obok instalatora i korzysta z niej tylko ten program. Głosów innych osób program nigdy nie zapisuje sam.':
+        "Taking part is voluntary and can be withdrawn at any time with “Remove my voice”. It helps every {app} user in the company: when you take part in a recorded meeting, your name shows up in their transcript by itself instead of “SPEAKER 2”.\n\nThe database stores a voiceprint (a set of numbers describing the sound, not a recording), your name, login and date. It lives in the company folder next to the installer and only this program uses it. The program never stores other people's voices on its own.",
+    'Nie słychać Cię — sprawdź mikrofon w „Zmień…” pod przyciskiem nagrywania.':
+        "Can't hear you — check the microphone in “Change…” under the record button.",
+    'z bazy głosów · {p:.0%}': 'from the voice database · {p:.0%}',
+    'To wydanie nie ma bazy głosów.':
+        'This edition has no voice database.',
+    'Błędna konfiguracja modelu odcisków głosu.':
+        'Invalid voiceprint model configuration.',
+    'Za mało mowy, żeby policzyć odcisk głosu.':
+        'Not enough speech to compute a voiceprint.',
+    'Model odcisków zwrócił pusty wektor.':
+        'The voiceprint model returned an empty vector.',
+    'Baza głosów jest pusta — bez podpowiedzi imion.':
+        'The voice database is empty — no name suggestions.',
+    'Baza głosów: pominięto {n} wpis(ów) — uszkodzone albo z innego modelu.':
+        'Voice database: skipped {n} entry(ies) — damaged or from another model.',
+    'W próbce jest tylko {s:.0f} s mowy — potrzeba co najmniej {min:.0f} s. Mów bliżej mikrofonu albo nagraj jeszcze raz.':
+        'The sample has only {s:.0f} s of speech — at least {min:.0f} s is needed. Speak closer to the microphone or record again.',
+    'Z bazy głosów rozpoznano: {kto}':
+        'Recognised from the voice database: {kto}',
+    'Baza głosów ({n} wpisów): nikogo nie rozpoznano.':
+        'Voice database ({n} entries): nobody recognised.',
+    'Folder bazy głosów niedostępny: {blad}':
+        'Voice database folder unavailable: {blad}',
+    'Nie udało się zapisać głosu w folderze firmowym: {blad}':
+        'Could not save the voice in the company folder: {blad}',
+    'Nie udało się usunąć wpisu: {blad}':
+        'Could not remove the entry: {blad}',
+    'Odcisk mówcy {n}: {blad}': 'Voiceprint of speaker {n}: {blad}',
+    '[{i}/{n}] Porównuję głosy z bazą…':
+        '[{i}/{n}] Comparing voices with the database…',
+    'Baza głosów: {blad}': 'Voice database: {blad}',
 }

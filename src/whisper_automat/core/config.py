@@ -105,6 +105,32 @@ def default_output_dir() -> Path:
 CONFIG_PATH = data_root() / "config.json"
 
 
+def imie_uzytkownika() -> str:
+    """Nazwa wyświetlana konta Windows („Jan Kowalski”), zapasowo login.
+
+    Domyślny podpis użytkownika w transkrypcji własnego nagrania —
+    zmienia się w ustawieniach („Twoje imię w transkrypcji”).
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            NameDisplay = 3
+            rozmiar = ctypes.c_ulong(0)
+            ctypes.windll.secur32.GetUserNameExW(NameDisplay, None, ctypes.byref(rozmiar))
+            bufor = ctypes.create_unicode_buffer(max(int(rozmiar.value), 1) + 1)
+            rozmiar = ctypes.c_ulong(len(bufor))
+            if ctypes.windll.secur32.GetUserNameExW(NameDisplay, bufor, ctypes.byref(rozmiar)):
+                if bufor.value.strip():
+                    return bufor.value.strip()
+        except (AttributeError, OSError, ValueError):
+            pass
+    try:
+        return os.getlogin().strip()
+    except OSError:
+        return os.environ.get("USERNAME", "").strip()
+
+
 LANGUAGES = [
     ("pl", "polski"),
     ("en", "angielski"),
@@ -153,6 +179,9 @@ class Settings:
     nagranie_glosniki: str = ""
     #: Po zatrzymaniu nagrania od razu uruchom transkrypcję.
     nagranie_transkrybuj: bool = True
+    #: Jak podpisać użytkownika w transkrypcji własnego nagrania (lewy
+    #: kanał to jego mikrofon). Puste = `imie_uzytkownika()` z Windows.
+    nagranie_imie: str = ""
     #: Język interfejsu: "pl", "en" albo pusty = język Windows (teksty.py).
     jezyk: str = ""
 

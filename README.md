@@ -11,11 +11,15 @@ na Twoim komputerze, bez internetu i bez chmury.
 
 - Przeciągasz nagrania audio lub wideo do okna, klikasz *Transkrybuj*, dostajesz tekst.
 - Nagrywa spotkania (Teams, Zoom, przeglądarka): jeden przycisk zbiera Twój mikrofon
-  i dźwięk rozmówców do jednego pliku FLAC, a po zatrzymaniu od razu go transkrybuje.
+  i dźwięk rozmówców do jednego pliku FLAC (dwa kanały: Ty i reszta), a po zatrzymaniu
+  od razu go transkrybuje. W trakcie: „Pauza” bez dziury w pliku i „Zaznacz” (F8) —
+  ważne momenty widać potem w tekście jako ⚑. Zestaw USB albo Bluetooth podłączony
+  w trakcie przejmuje nagranie sam.
 - Rozpoznaje mowę modelem Whisper (`large-v3-turbo`) na Twoim komputerze. Z kartą
   NVIDIA kilkanaście razy szybciej niż czas nagrania, bez karty na procesorze.
 - Zapisuje TXT ze znacznikami czasu, czysty tekst, napisy SRT i VTT oraz JSON.
 - Rozpoznaje, kto co powiedział, i pozwala nadać mówcom imiona po odsłuchaniu próbek.
+  We własnym nagraniu Twoje wypowiedzi są podpisane od razu — bez zgadywania.
 - Kolejka wielu plików i automatyczne aktualizacje.
 - Interfejs po polsku i po angielsku (według języka Windows, przełącznik PL/EN w oknie).
 

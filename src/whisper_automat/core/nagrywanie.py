@@ -1,9 +1,14 @@
 """Nagrywanie spotkań: mikrofon i dźwięk systemowy prosto do pliku FLAC.
 
-Co powstaje: jeden plik `Spotkanie RRRR-MM-DD GG-MM.flac`, 16 kHz, mono,
-16 bitów — dokładnie to, co i tak dostaje model (media.extract_audio robi
-z każdego wejścia 16 kHz mono), więc bezstratnie i bez marnowania miejsca:
-około 50 MB na godzinę mowy, kodowanie poniżej 1 % jednego rdzenia.
+Co powstaje: jeden plik `Spotkanie RRRR-MM-DD GG-MM.flac`, 16 kHz, 16 bitów,
+dwa kanały: lewy to mikrofon (Ty), prawy to dźwięk spotkania (rozmówcy).
+Transkrypcja idzie na miksie obu kanałów (media.extract_audio sprowadza
+każde wejście do 16 kHz mono), a rozpoznawanie mówców dostaje każdy tor
+osobno: lewy kanał to na pewno Ty, więc diaryzacja zgaduje tylko na prawym
+(pipeline, diarization.odcinki_wlasne). Tag FLAC `WHISPER_AUTOMAT` mówi
+programowi, że to własne nagranie i co leży w którym kanale — plik bez
+tagu albo mono (nagrania sprzed 1.5) idzie starą drogą. Rozmiar: około
+80 MB na godzinę, kodowanie poniżej 1 % jednego rdzenia.
 
 Skąd dźwięk: PyAudioWPatch (PortAudio z łatą na WASAPI loopback). Mikrofon
 to zwykłe urządzenie wejściowe, dźwięk spotkania (Teams w głośnikach albo
@@ -22,6 +27,15 @@ Trzy rzeczy, o które trzeba zadbać — wszystkie sprawdzone w spike'u
   w tym samym wątku, inaczej WASAPI odpowiada „Unanticipated host error”.
   Callbacki PortAudio tylko wkładają bajty do kolejek; całą resztę robi
   wątek roboczy.
+* Podążanie za urządzeniem (od 1.5): gdy w ustawieniach jest „domyślne”
+  (pusta nazwa), a w trakcie nagrania Windows zmieni domyślny mikrofon albo
+  urządzenie odtwarzania (podłączony zestaw USB, połączone słuchawki
+  Bluetooth), tor jest przepinany na nowe urządzenie — nagranie idzie dalej
+  do tego samego pliku, bez luki. Sprawdzane co 3 s przez COM
+  (urzadzenia.punkty, ~20 ms), bez tworzenia PyAudio. Urządzenie wskazane
+  z nazwy nigdy nie jest przełączane. PortAudio zna tylko domyślne
+  urządzenie multimedialne; Teams używa „komunikacyjnego”, które bywa inne
+  — wtedy zostaje „Zmień…” i podpowiedź o ciszy w torze spotkania.
 * Dwa zegary: mikrofon i głośniki mają osobne kwarce, a każdy z nich dryfuje
   względem zegara systemowego. Każde źródło kładzie swoje próbki na wspólną
   oś czasu (OsCzasu) według czasu, który PortAudio podał przy pakiecie
@@ -74,8 +88,21 @@ KROK_MAX = RATE // 50
 BUFOR_PA_MS = 100
 #: Minimalne wolne miejsce na dysku przy starcie.
 MIN_WOLNE_B = 1 << 30
+#: Co ile sekund sprawdzamy, czy Windows zmienił domyślne urządzenie.
+CO_ILE_URZADZENIA_S = 3.0
 ROZSZERZENIE = ".flac"
 ZNACZNIK = ".nagrywanie"
+#: Tag w pliku FLAC: po nim program poznaje własne nagranie i układ kanałów.
+#: Czytany przez media.probe_media (ffprobe, format.tags) i parsowany
+#: w diarization.tag_nagrania.
+TAG = "WHISPER_AUTOMAT"
+TAG_WARTOSC = "nagranie-spotkania;kanaly=mikrofon,system;wersja=1.5"
+#: Kanały pliku: 0 = mikrofon, 1 = system.
+KANALY = 2
+#: Zaznaczone momenty: plik obok nagrania, `Spotkanie ….znaczniki.json`,
+#: lista [{"czas": sekundy od startu, "opis": ""}]. Czyta go pipeline
+#: (wczytaj_znaczniki), zapisują writers do TXT i JSON.
+ZNACZNIKI = ".znaczniki.json"
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +189,15 @@ def _znajdz(lista: List[UrzadzenieAudio], nazwa: str) -> Optional[UrzadzenieAudi
     return lista[0] if lista else None
 
 
+def _czy_przepiac(ustawienie: str, otwarte: str, domyslne: str) -> bool:
+    """Czy tor otwarty na `otwarte` ma przejść na nowe domyślne urządzenie.
+
+    Tylko gdy użytkownik zostawił „domyślne” (puste ustawienie), Windows
+    ma teraz inne domyślne i jego nazwa jest znana. Wskazane z nazwy — nigdy.
+    """
+    return not ustawienie and bool(domyslne) and bool(otwarte) and domyslne != otwarte
+
+
 # ---------------------------------------------------------------------------
 # Zdarzenia dla okna
 # ---------------------------------------------------------------------------
@@ -182,6 +218,11 @@ class ZdarzeniaNagrywania:
     #: Zatrzymane przez użytkownika: ścieżka pliku i długość w sekundach.
     zakonczono: Callable[[Path, float], None] = lambda _p, _s: None
     anulowano: Callable[[], None] = lambda: None
+    #: Pauza weszła (True) albo nagranie wznowione (False).
+    pauza: Callable[[bool], None] = lambda _p: None
+    #: Lista urządzeń Windows (urzadzenia.PunktAudio) odświeżona w trakcie
+    #: nagrania, co kilka sekund — okno pokazuje z niej linię źródeł.
+    urzadzenia: Callable[[list], None] = lambda _u: None
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +376,11 @@ class Zrodlo:
             self._uloz(t, self._resample(flt))
 
     def zakoncz(self) -> None:
+        """Dopycha resztę z resamplera. Drugie wywołanie nic nie robi."""
+        if self._res is None:
+            return
         reszta = self._resample(None)
+        self._res = None
         if reszta.size and self.pozycja is not None:
             self.os.wpisz(self.pozycja, reszta)
             self.pozycja += int(reszta.size)
@@ -390,39 +435,70 @@ class Zrodlo:
 
 
 def miksuj(m: np.ndarray, s: np.ndarray) -> np.ndarray:
-    """Suma obu torów (nie średnia — strony rzadko mówią naraz), miękki limiter."""
+    """Suma obu torów (nie średnia — strony rzadko mówią naraz), miękki limiter.
+
+    Od 1.5 plik jest dwukanałowy (`przeplot`), a miks robi dopiero ffmpeg
+    przy transkrypcji; ta funkcja zostaje dla testów i narzędzi.
+    """
     y = m.astype(np.float32) / 32768.0 + s.astype(np.float32) / 32768.0
     if y.size and float(np.max(np.abs(y))) > 0.99:
         y = np.tanh(y)
     return np.clip(np.rint(y * 32768.0), -32768, 32767).astype(np.int16)
 
 
-class ZapisFlac:
-    """FLAC 16 kHz mono pisany na bieżąco, własnym uchwytem pliku (fsync)."""
+def przeplot(m: np.ndarray, s: np.ndarray) -> np.ndarray:
+    """Dwa tory w jeden strumień stereo: [m0, s0, m1, s1, …] (lewy = mikrofon)."""
+    n = min(int(m.size), int(s.size))
+    out = np.empty(2 * n, dtype=np.int16)
+    out[0::2] = m[:n]
+    out[1::2] = s[:n]
+    return out
 
-    def __init__(self, sciezka: Path):
+
+def tagi_nagrania(plik: Path) -> dict:
+    """Tagi wpisywane do pliku FLAC własnego nagrania."""
+    return {TAG: TAG_WARTOSC, "title": Path(plik).stem}
+
+
+class ZapisFlac:
+    """FLAC 16 kHz pisany na bieżąco, własnym uchwytem pliku (fsync).
+
+    `kanaly=2` przyjmuje w `zapisz` próbki przeplecione (`przeplot`).
+    Tagi (słownik) trafiają do nagłówka — PyAV wymaga ich przed
+    `add_stream`, ffprobe oddaje je w `format.tags`.
+    """
+
+    def __init__(self, sciezka: Path, kanaly: int = 1, tagi: Optional[dict] = None):
         import av
 
         self.sciezka = Path(sciezka)
+        self.kanaly = int(kanaly)
         self._plik = open(self.sciezka, "wb", buffering=0)
         self._kont = av.open(self._plik, "w", format="flac")
+        for klucz, wartosc in (tagi or {}).items():
+            self._kont.metadata[str(klucz)] = str(wartosc)
         self._st = self._kont.add_stream("flac", rate=RATE)
-        self._st.layout = "mono"
+        self._st.layout = "stereo" if self.kanaly == 2 else "mono"
         self._st.format = "s16"
         self._av = av
         self._pts = 0
+        #: Liczba ramek (próbek na kanał).
         self.probki = 0
 
     def zapisz(self, s16: np.ndarray) -> None:
+        """Próbki int16: mono wprost, stereo przeplecione (2 na ramkę)."""
+        s16 = np.ascontiguousarray(s16, dtype=np.int16).reshape(-1)
         if s16.size == 0:
             return
+        ramek = int(s16.size) // self.kanaly
         r = self._av.AudioFrame.from_ndarray(
-            np.ascontiguousarray(s16).reshape(1, -1), format="s16", layout="mono")
+            s16[: ramek * self.kanaly].reshape(1, -1), format="s16",
+            layout="stereo" if self.kanaly == 2 else "mono")
         r.sample_rate = RATE
         r.pts = self._pts
         r.time_base = Fraction(1, RATE)
-        self._pts += int(s16.size)
-        self.probki += int(s16.size)
+        self._pts += ramek
+        self.probki += ramek
         self._kont.mux(self._st.encode(r))
 
     def fsync(self) -> None:
@@ -473,6 +549,49 @@ def usun_znacznik(plik: Path) -> None:
         sciezka_znacznika(plik).unlink()
     except OSError:
         pass
+
+
+def sciezka_znacznikow(plik: Path) -> Path:
+    """`Spotkanie ….flac` → `Spotkanie ….znaczniki.json` (obok nagrania)."""
+    plik = Path(plik)
+    return plik.with_name(plik.stem + ZNACZNIKI)
+
+
+def zapisz_znaczniki(plik: Path, znaczniki: list) -> Optional[Path]:
+    """Zapisuje zaznaczone momenty obok nagrania; bez znaczników nic."""
+    if not znaczniki:
+        return None
+    cel = sciezka_znacznikow(plik)
+    cel.write_text(json.dumps(
+        [{"czas": round(float(z.get("czas", 0.0)), 3), "opis": str(z.get("opis", ""))}
+         for z in znaczniki],
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    return cel
+
+
+def wczytaj_znaczniki(plik: Path) -> list:
+    """Znaczniki leżące obok pliku (dowolnego — nie tylko własnego nagrania).
+
+    Zwraca listę {"czas": float, "opis": str} posortowaną po czasie; pustą,
+    gdy pliku nie ma albo jest nieczytelny.
+    """
+    sciezka = sciezka_znacznikow(plik)
+    if not sciezka.is_file():
+        return []
+    try:
+        dane = json.loads(sciezka.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(dane, dict):
+        dane = dane.get("znaczniki", [])
+    wynik = []
+    for wpis in dane if isinstance(dane, list) else []:
+        try:
+            wynik.append({"czas": float(wpis.get("czas", 0.0)),
+                          "opis": str(wpis.get("opis", "") or "")})
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return sorted(wynik, key=lambda z: z["czas"])
 
 
 def _proces_zyje(pid: int) -> bool:
@@ -531,7 +650,9 @@ def napraw_nagranie(plik: Path) -> Path:
     """Przepisuje urwany FLAC do pliku z poprawnym nagłówkiem (długością).
 
     Dekoduje, ile się da (ostatni, urwany blok pomija), koduje na nowo do
-    `<nazwa> (odzyskane).flac`, usuwa uszkodzony plik i znacznik.
+    `<nazwa> (odzyskane).flac` — z tą samą liczbą kanałów i tagami, żeby
+    odzyskane nagranie dalej było „własne” dla transkrypcji — usuwa
+    uszkodzony plik i znacznik.
     """
     import av
 
@@ -542,11 +663,17 @@ def napraw_nagranie(plik: Path) -> Path:
         cel = plik.with_name(f"{plik.stem} (odzyskane) ({licznik}){plik.suffix}")
         licznik += 1
 
-    zapis = ZapisFlac(cel)
-    res = av.AudioResampler(format="s16", layout="mono", rate=RATE)
+    zapis = None
     try:
         with av.open(str(plik)) as zrodlo:
             strumien = zrodlo.streams.audio[0]
+            kanaly = 2 if int(strumien.channels or 1) >= 2 else 1
+            tagi = dict(zrodlo.metadata or {})
+            if TAG in tagi:
+                tagi["title"] = cel.stem
+            zapis = ZapisFlac(cel, kanaly=kanaly, tagi=tagi)
+            res = av.AudioResampler(format="s16", layout="stereo" if kanaly == 2 else "mono",
+                                    rate=RATE)
             try:
                 for ramka in zrodlo.decode(strumien):
                     for r in res.resample(ramka):
@@ -558,13 +685,20 @@ def napraw_nagranie(plik: Path) -> Path:
             zapis.zapisz(r.to_ndarray()[0].astype(np.int16, copy=False))
         zapis.zamknij()
     except Exception:
-        zapis.porzuc()
+        if zapis is not None:
+            zapis.porzuc()
         raise
     try:
         plik.unlink()
     except OSError:
         pass
     usun_znacznik(plik)
+    stare_znaczniki = sciezka_znacznikow(plik)
+    if stare_znaczniki.is_file():
+        try:
+            stare_znaczniki.replace(sciezka_znacznikow(cel))
+        except OSError:
+            pass
     return cel
 
 
@@ -644,7 +778,8 @@ class Nagrywarka:
     dają znak — wynik przychodzi przez `zdarzenia.zakonczono/anulowano`.
     """
 
-    BEZCZYNNA, STARTUJE, NAGRYWA, KONCZY = "bezczynna", "startuje", "nagrywa", "konczy"
+    BEZCZYNNA, STARTUJE, NAGRYWA, PAUZA, KONCZY = (
+        "bezczynna", "startuje", "nagrywa", "pauza", "konczy")
 
     def __init__(self) -> None:
         self.stan = self.BEZCZYNNA
@@ -653,10 +788,19 @@ class Nagrywarka:
         #: Po zakończeniu: luki, obcięcia, korekty dryfu i odrzucone próbki
         #: na każde źródło — do dziennika i diagnostyki.
         self.statystyki: dict = {}
+        #: Zaznaczone momenty bieżącego nagrania: {"czas": s, "opis": ""}.
+        self.znaczniki: list = []
         self._stop = threading.Event()
         self._anuluj = threading.Event()
+        self._pauza = threading.Event()
         self._watek: Optional[threading.Thread] = None
         self._zdarzenia = ZdarzeniaNagrywania()
+        #: Zegar i funkcja czasu bieżącego nagrania — do znaczników.
+        self._zegar: Optional[Zegar] = None
+        self._teraz: Optional[Callable[[], float]] = None
+        #: Pozycja w pliku (s), w której weszła pauza — znacznik w pauzie
+        #: wskazuje ją, nie licznik, który idzie z opóźnieniem bufora.
+        self._pozycja_pauzy = 0.0
 
     # -- sterowanie --------------------------------------------------------
 
@@ -681,8 +825,10 @@ class Nagrywarka:
         self._zdarzenia = zdarzenia or ZdarzeniaNagrywania()
         self._stop.clear()
         self._anuluj.clear()
+        self._pauza.clear()
         self.sciezka = nazwa_pliku(katalog)
         self.czas_trwania = 0.0
+        self.znaczniki = []
         self.stan = self.STARTUJE
         self._watek = threading.Thread(
             target=self._praca, args=(mikrofon, glosniki), daemon=True,
@@ -691,15 +837,41 @@ class Nagrywarka:
         return self.sciezka
 
     def stop(self) -> None:
-        if self.stan in (self.STARTUJE, self.NAGRYWA):
+        if self.stan in (self.STARTUJE, self.NAGRYWA, self.PAUZA):
             self.stan = self.KONCZY
             self._stop.set()
 
     def anuluj(self) -> None:
-        if self.stan in (self.STARTUJE, self.NAGRYWA):
+        if self.stan in (self.STARTUJE, self.NAGRYWA, self.PAUZA):
             self.stan = self.KONCZY
             self._anuluj.set()
             self._stop.set()
+
+    def pauza(self) -> None:
+        """Wstrzymuje nagranie: tory zamknięte, licznik stoi, plik bez luki.
+
+        Wątek roboczy potwierdza przez `zdarzenia.pauza(True)`.
+        """
+        if self.stan == self.NAGRYWA:
+            self._pauza.set()
+
+    def wznow(self) -> None:
+        if self.stan == self.PAUZA:
+            self._pauza.clear()
+
+    def znacznik(self, opis: str = "") -> Optional[dict]:
+        """Zaznacza bieżący moment; zapis obok nagrania przy zamknięciu."""
+        if self.stan not in (self.NAGRYWA, self.PAUZA):
+            return None
+        czas = self.czas_trwania
+        if self.stan == self.PAUZA:
+            czas = max(czas, self._pozycja_pauzy)
+        elif self._zegar is not None and self._teraz is not None:
+            # Dokładniej niż licznik, który idzie z opóźnieniem bufora.
+            czas = max(czas, self._zegar.pozycja(self._teraz()) / RATE)
+        wpis = {"czas": round(float(czas), 3), "opis": str(opis or "")}
+        self.znaczniki.append(wpis)
+        return wpis
 
     def czekaj(self, timeout: Optional[float] = None) -> bool:
         """Czeka na koniec wątku (do zamykania okna). True, gdy skończył."""
@@ -773,6 +945,7 @@ class Nagrywarka:
                 zd.ostrzezenie(t("Brak mikrofonu — nagrywam sam dźwięk systemowy."))
             if zegar is None:
                 zegar = Zegar(teraz())
+            self._zegar, self._teraz = zegar, teraz
             osie = {k: OsCzasu() for k in ("mikrofon", "system")}
             zrodla = {
                 k: Zrodlo(k, t.rate, t.kanaly, zegar, osie[k], t.opoznienie)
@@ -781,22 +954,76 @@ class Nagrywarka:
 
             zapisz_znacznik(plik, mikrofon=mik.nazwa if mik else "",
                             system=wy.nazwa if wy else "")
-            zapis = ZapisFlac(plik)
+            zapis = ZapisFlac(plik, kanaly=KANALY, tagi=tagi_nagrania(plik))
+            #: Na jakim urządzeniu stoi każdy tor — do podążania za domyślnym.
+            otwarte = {"mikrofon": mik.nazwa if mik else "", "system": wy.nazwa if wy else ""}
+            ustawienia = {"mikrofon": mikrofon_nazwa, "system": glosniki_nazwa}
             self.stan = self.NAGRYWA
 
             wydane = 0
             ostatni_fsync = ostatnie_poziomy = ostatni_czas = teraz()
             ostatnia_petla = teraz()
+            ostatnie_urzadzenia = teraz()
             martwe: dict = {}
+            #: Pauza: kiedy weszła (czas zegara) — przy wznowieniu zegar
+            #: przeskakuje o tyle, ile trwała, więc w pliku nie ma luki.
+            t_pauzy: Optional[float] = None
 
             while not self._stop.is_set():
                 time.sleep(0.1)
                 chwila = teraz()
-                if chwila - ostatnia_petla > MAX_LUKA_S:
+                if chwila - ostatnia_petla > MAX_LUKA_S and t_pauzy is None:
                     # Komputer spał. Zamiast pół godziny ciszy — sekunda.
                     zegar.przesuniecie += (chwila - ostatnia_petla) - 1.0
                     zd.ostrzezenie(t("Komputer był uśpiony — w nagraniu zostaje sekunda przerwy."))
                 ostatnia_petla = chwila
+
+                if self._pauza.is_set() and t_pauzy is None:
+                    # Wejście w pauzę: dobierz resztki, zamknij tory i ciszę.
+                    for nazwa, tor in tory.items():
+                        tor.zamknij()
+                        zrodla[nazwa].przyjmij_wiele((tp, d) for tp, d, _s in tor.zbierz())
+                        zrodla[nazwa].zakoncz()
+                    if cichy is not None:
+                        try:
+                            cichy.stop_stream()
+                            cichy.close()
+                        except Exception:
+                            pass
+                        cichy = None
+                    t_pauzy = chwila
+                    self._pozycja_pauzy = zegar.pozycja(chwila) / RATE
+                    martwe.clear()
+                    self.stan = self.PAUZA
+                    zd.poziomy(-120.0, -120.0)
+                    zd.pauza(True)
+                    continue
+                if t_pauzy is not None:
+                    if self._pauza.is_set():
+                        continue
+                    # Wznowienie: zegar przeskakuje o długość pauzy, tory od nowa.
+                    zegar.przesuniecie += chwila - t_pauzy
+                    t_pauzy = None
+                    for nazwa in list(tory):
+                        nowy = self._wznow(pa, nazwa, mikrofon_nazwa, glosniki_nazwa, teraz)
+                        if nowy is None:
+                            zd.ostrzezenie(t(
+                                "{kto} nie dał się otworzyć po pauzie — nagrywam dalej bez niego."
+                            ).format(kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk systemowy")))
+                            del tory[nazwa]
+                            continue
+                        p2, tor_nowy, cichy_nowy, urzadzenie = nowy
+                        instancje.append(p2)
+                        if cichy_nowy is not None:
+                            cichy = cichy_nowy
+                        tory[nazwa] = tor_nowy
+                        otwarte[nazwa] = urzadzenie
+                        zrodla[nazwa] = Zrodlo(nazwa, tor_nowy.rate, tor_nowy.kanaly,
+                                               zegar, osie[nazwa], tor_nowy.opoznienie)
+                    self.stan = self.NAGRYWA
+                    zd.pauza(False)
+                    if not tory:
+                        raise BladNagrywania(t("Po pauzie nie ma z czego nagrywać."))
 
                 for nazwa, tor in list(tory.items()):
                     zrodla[nazwa].przyjmij_wiele((tp, d) for tp, d, _s in tor.zbierz())
@@ -810,28 +1037,42 @@ class Nagrywarka:
                         martwe[nazwa] = chwila
                         nowy = self._wznow(pa, nazwa, mikrofon_nazwa, glosniki_nazwa, teraz)
                         if nowy is not None:
-                            p2, tor_nowy, cichy_nowy = nowy
-                            instancje.append(p2)
-                            tor.zamknij()
-                            if cichy_nowy is not None:
-                                if cichy is not None:
-                                    try:
-                                        cichy.stop_stream()
-                                        cichy.close()
-                                    except Exception:
-                                        pass
-                                cichy = cichy_nowy
-                            tory[nazwa] = tor_nowy
-                            zrodla[nazwa] = Zrodlo(nazwa, tor_nowy.rate, tor_nowy.kanaly,
-                                                   zegar, osie[nazwa], tor_nowy.opoznienie)
+                            cichy = self._przepnij(nazwa, nowy, tory, zrodla, osie, otwarte,
+                                                   instancje, cichy, zegar)
                             del martwe[nazwa]
                             zd.ostrzezenie(t("{kto} wznowiony.").format(
                                 kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk systemowy")))
 
+                if chwila - ostatnie_urzadzenia >= CO_ILE_URZADZENIA_S:
+                    # Podążanie za domyślnym urządzeniem Windows (patrz opis modułu).
+                    ostatnie_urzadzenia = chwila
+                    punkty = self._punkty()
+                    if punkty:
+                        zd.urzadzenia(punkty)
+                    for nazwa in list(tory):
+                        if nazwa in martwe or not punkty:
+                            continue
+                        domyslne = self._domyslne(punkty, wejscie=(nazwa == "mikrofon"))
+                        if not _czy_przepiac(ustawienia[nazwa], otwarte[nazwa], domyslne):
+                            continue
+                        nowy = self._wznow(pa, nazwa, "", "", teraz)
+                        if nowy is None or nowy[3] == otwarte[nazwa]:
+                            # PortAudio jeszcze nie widzi zmiany — spróbujemy za chwilę.
+                            if nowy is not None:
+                                nowy[1].zamknij()
+                                self._zamknij_cichy(nowy[2])
+                                nowy[0].terminate()
+                            continue
+                        cichy = self._przepnij(nazwa, nowy, tory, zrodla, osie, otwarte,
+                                               instancje, cichy, zegar)
+                        zd.ostrzezenie(t("{kto} przełączony na: {urzadzenie}").format(
+                            kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk spotkania"),
+                            urzadzenie=otwarte[nazwa]))
+
                 cel = zegar.pozycja(chwila) - int(BUFOR_S * RATE)
                 while wydane + BLOK <= cel:
-                    zapis.zapisz(miksuj(osie["mikrofon"].pobierz(wydane, BLOK),
-                                        osie["system"].pobierz(wydane, BLOK)))
+                    zapis.zapisz(przeplot(osie["mikrofon"].pobierz(wydane, BLOK),
+                                          osie["system"].pobierz(wydane, BLOK)))
                     wydane += BLOK
                 self.czas_trwania = wydane / RATE
 
@@ -860,8 +1101,8 @@ class Nagrywarka:
                 koniec = max([o.najdalej for o in osie.values()] + [wydane])
                 while wydane < koniec:
                     n = min(BLOK, koniec - wydane)
-                    zapis.zapisz(miksuj(osie["mikrofon"].pobierz(wydane, n),
-                                        osie["system"].pobierz(wydane, n)))
+                    zapis.zapisz(przeplot(osie["mikrofon"].pobierz(wydane, n),
+                                          osie["system"].pobierz(wydane, n)))
                     wydane += n
                 self.czas_trwania = wydane / RATE
                 if wydane == 0:
@@ -875,6 +1116,10 @@ class Nagrywarka:
                 zapis.zamknij()
                 zapis = None
                 usun_znacznik(plik)
+                try:
+                    zapisz_znaczniki(plik, self.znaczniki)
+                except OSError as exc:
+                    zd.ostrzezenie(t("Nie udało się zapisać zaznaczonych momentów: {blad}").format(blad=exc))
                 self.statystyki = {
                     nazwa: {"luki": z.luki, "wyprzedzenia": z.wyprzedzenia,
                             "korekty": z.korekty, "odrzucone": z.os.odrzucone}
@@ -912,16 +1157,65 @@ class Nagrywarka:
             self.stan = self.BEZCZYNNA
             zd.blad(komunikat)
         finally:
+            self._zegar = self._teraz = None
             for inst in instancje:
                 try:
                     inst.terminate()
                 except Exception:
                     pass
 
+    @staticmethod
+    def _punkty() -> list:
+        """Urządzenia Windows (COM) — pusta lista, gdy się nie da."""
+        try:
+            from . import urzadzenia
+
+            return urzadzenia.punkty()
+        except Exception:
+            return []
+
+    @staticmethod
+    def _domyslne(punkty: list, wejscie: bool) -> str:
+        """Nazwa domyślnego (multimedialnego) urządzenia Windows w danym kierunku."""
+        for p in punkty:
+            if p.wejscie == wejscie and p.domyslne:
+                return p.nazwa
+        return ""
+
+    @staticmethod
+    def _zamknij_cichy(cichy) -> None:
+        if cichy is None:
+            return
+        try:
+            cichy.stop_stream()
+            cichy.close()
+        except Exception:
+            pass
+
+    def _przepnij(self, nazwa: str, nowy, tory: dict, zrodla: dict, osie: dict,
+                  otwarte: dict, instancje: list, cichy, zegar: Zegar):
+        """Stary tor zamknięty, nowy (z `_wznow`) na jego miejsce. Zwraca cichy strumień."""
+        p2, tor_nowy, cichy_nowy, urzadzenie = nowy
+        instancje.append(p2)
+        stary = tory.get(nazwa)
+        if stary is not None:
+            stary.zamknij()
+            zrodla[nazwa].przyjmij_wiele((tp, d) for tp, d, _s in stary.zbierz())
+            zrodla[nazwa].zakoncz()
+        if cichy_nowy is not None:
+            self._zamknij_cichy(cichy)
+            cichy = cichy_nowy
+        tory[nazwa] = tor_nowy
+        otwarte[nazwa] = urzadzenie
+        zrodla[nazwa] = Zrodlo(nazwa, tor_nowy.rate, tor_nowy.kanaly,
+                               zegar, osie[nazwa], tor_nowy.opoznienie)
+        return cichy
+
     def _wznow(self, pa, nazwa: str, mikrofon_nazwa: str, glosniki_nazwa: str, teraz):
         """Próbuje otworzyć od nowa tor, który padł — na świeżej instancji PyAudio.
 
-        Zwraca (instancja, tor, cichy strumień wyjściowy albo None) lub None.
+        Zwraca (instancja, tor, cichy strumień wyjściowy albo None, nazwa
+        urządzenia) lub None.
         """
         p2 = None
         try:
@@ -931,7 +1225,7 @@ class Nagrywarka:
                 u = _znajdz(wejscia, mikrofon_nazwa)
                 if u is None:
                     raise LookupError(nazwa)
-                return p2, _Tor(p2, pa, u.index, u.rate, min(u.kanaly, 2), teraz), None
+                return p2, _Tor(p2, pa, u.index, u.rate, min(u.kanaly, 2), teraz), None, u.nazwa
             u = _znajdz(wyjscia, glosniki_nazwa)
             if u is None or u.loopback_index is None:
                 raise LookupError(nazwa)
@@ -942,7 +1236,8 @@ class Nagrywarka:
                 frames_per_buffer=max(1, rate * BUFOR_PA_MS // 1000),
                 stream_callback=lambda _i, fc, _ti, _st: (bytes(fc * ch * 4), pa.paContinue),
             )
-            return p2, _Tor(p2, pa, u.loopback_index, rate, 2 if ch >= 2 else 1, teraz), cichy
+            return (p2, _Tor(p2, pa, u.loopback_index, rate, 2 if ch >= 2 else 1, teraz),
+                    cichy, u.nazwa)
         except Exception:
             if p2 is not None:
                 try:

@@ -32,6 +32,15 @@ wersję dopiero, gdy wszystko leży na miejscu. Starsze instalatory z folderu
 są usuwane. Publikacja jest natychmiastowa: kto ma program otwarty, dostanie
 pasek przy najbliższym sprawdzeniu (raz na dobę albo „Sprawdź aktualizacje”).
 Na koniec skrypt sprawdza folder tak, jak zrobi to program (`update.sprawdz`).
+
+Kopia zapasowa (firma): gdy jest tools/kopia_wydan.local.txt (ścieżka
+folderu, np. na dysku Google Drive dla komputerów) albo --kopia, po
+publikacji instalator, suma, podpis i najnowsza.json trafiają do
+`<kopia>\\<wersja>\\`, a baza głosów (`Glosy\\`) do `<kopia>\\Glosy\\`.
+Zostają trzy ostatnie wersje (--zachowaj). Awaria serwera: `--przywroc`
+kopiuje najnowszą (albo --przywroc 1.5.0) z powrotem do folderu firmowego,
+razem z bazą głosów — bez budowania i bez podpisywania (pliki są już
+podpisane). `--tylko-kopia` robi samą kopię tego, co leży w folderze.
 """
 
 from __future__ import annotations
@@ -59,6 +68,8 @@ KLUCZ_DOMYSLNY = Path(os.environ.get("PAPUGA_KLUCZ_WYDAN")
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
 PLIK_FOLDERU = ROOT / "tools" / "aktualizacje_firmy.local.txt"
+PLIK_KOPII = ROOT / "tools" / "kopia_wydan.local.txt"
+GLOSY = "Glosy"
 LIMIT_GITHUBA = 2 * 1024 ** 3
 MB = 1024 ** 2
 
@@ -116,6 +127,91 @@ def folder_firmy(podany: Optional[Path]) -> Path:
         raise SystemExit("Publikacja na serwer http wymaga własnego sposobu wgrywania — "
                          "ten skrypt kopiuje tylko do folderu (UNC albo dysk).")
     return Path(tekst)
+
+
+def folder_kopii(podany: Optional[Path]) -> Optional[Path]:
+    """Folder kopii zapasowej wydań firmowych — None, gdy nie skonfigurowano."""
+    if podany:
+        return podany
+    try:
+        tekst = PLIK_KOPII.read_text(encoding="utf-8").strip()
+    except OSError:
+        tekst = ""
+    return Path(tekst) if tekst else None
+
+
+def _kopiuj_folder(zrodlo: Path, cel: Path, wzorzec: str = "*") -> int:
+    """Kopiuje pliki (bez podfolderów) pasujące do wzorca. Zwraca liczbę."""
+    if not zrodlo.is_dir():
+        return 0
+    cel.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for plik in sorted(zrodlo.glob(wzorzec)):
+        if plik.is_file():
+            shutil.copy2(plik, cel / plik.name)
+            n += 1
+    return n
+
+
+def kopia_zapasowa(folder: Path, kopia: Path, ver: str, zachowaj: int) -> None:
+    """`<kopia>\\<wersja>\\` z plikami wydania i `<kopia>\\Glosy\\` z bazą głosów."""
+    cel = kopia / ver
+    print(f"  kopia  : {cel}")
+    n = 0
+    for plik in sorted(folder.iterdir()):
+        if plik.is_file():
+            cel.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(plik, cel / plik.name)
+            n += 1
+    print(f"  skopiowano {n} plik(ów) wydania")
+    glosy = _kopiuj_folder(folder / GLOSY, kopia / GLOSY, "*.json")
+    if glosy:
+        print(f"  baza głosów: {glosy} wpis(ów) → {kopia / GLOSY}")
+    # Starsze kopie wersji schodzą — zostaje `zachowaj` najnowszych.
+    wersje = sorted((k for k in kopia.iterdir() if k.is_dir() and k.name != GLOSY),
+                    key=lambda k: [int(x) if x.isdigit() else 0 for x in k.name.split(".")])
+    for stara in wersje[:-zachowaj] if zachowaj > 0 else []:
+        shutil.rmtree(stara, ignore_errors=True)
+        print(f"  usunięto starą kopię: {stara.name}")
+
+
+def przywroc(kopia: Path, folder: Path, ver: str, wyd: Wydanie) -> int:
+    """Odtwarza folder firmowy z kopii: pliki wydania + baza głosów."""
+    wersje = sorted((k.name for k in kopia.iterdir() if k.is_dir() and k.name != GLOSY),
+                    key=lambda v: [int(x) if x.isdigit() else 0 for x in v.split(".")])
+    if not wersje:
+        raise SystemExit(f"W {kopia} nie ma żadnej kopii wydania.")
+    wybrana = ver if ver and ver != "latest" else wersje[-1]
+    if wybrana not in wersje:
+        raise SystemExit(f"Brak kopii wersji {wybrana}; są: {', '.join(wersje)}")
+    zrodlo = kopia / wybrana
+    print(f"  przywracam {wybrana}: {zrodlo} → {folder}")
+    folder.mkdir(parents=True, exist_ok=True)
+    manifest = None
+    for plik in sorted(zrodlo.iterdir()):
+        if not plik.is_file():
+            continue
+        if plik.name == update.MANIFEST:
+            manifest = plik
+            continue
+        tymczasowy = folder / (plik.name + ".part")
+        shutil.copyfile(plik, tymczasowy)
+        os.replace(tymczasowy, folder / plik.name)
+        print(f"  {plik.name}")
+    if manifest is not None:
+        # Manifest na końcu — program u ludzi widzi wydanie dopiero w komplecie.
+        tymczasowy = folder / (manifest.name + ".part")
+        shutil.copyfile(manifest, tymczasowy)
+        os.replace(tymczasowy, folder / manifest.name)
+        print(f"  {manifest.name}")
+    glosy = _kopiuj_folder(kopia / GLOSY, folder / GLOSY, "*.json")
+    if glosy:
+        print(f"  baza głosów: {glosy} wpis(ów)")
+    akt = update.sprawdz("0.0.0", replace(wyd, aktualizacje_folder=str(folder)))
+    if akt is None or akt.wersja != wybrana or not akt.podpisana:
+        raise SystemExit(f"Program nie uznałby przywróconego wydania: {akt and akt.uwaga}")
+    print(f"\n  Gotowe. Folder firmowy ma znów wersję {wybrana} z podpisem.")
+    return 0
 
 
 def podpisz(instalator: Path, wyd: Wydanie, plik_klucza: Path) -> tuple[str, Path, Path]:
@@ -234,16 +330,46 @@ def main() -> int:
                         help="Firma: folder docelowy (domyślnie z tools/aktualizacje_firmy.local.txt).")
     parser.add_argument("--klucz", type=Path, default=KLUCZ_DOMYSLNY,
                         help="Plik z kluczem prywatnym do podpisu wydań.")
+    parser.add_argument("--kopia", type=Path,
+                        help="Firma: folder kopii zapasowej (domyślnie z tools/kopia_wydan.local.txt).")
+    parser.add_argument("--zachowaj", type=int, default=3,
+                        help="Ile ostatnich wersji trzymać w kopii zapasowej (domyślnie 3).")
+    parser.add_argument("--tylko-kopia", action="store_true",
+                        help="Firma: tylko skopiuj to, co leży w folderze firmowym, do kopii zapasowej.")
+    parser.add_argument("--przywroc", nargs="?", const="latest", metavar="WERSJA",
+                        help="Firma: odtwórz folder firmowy z kopii zapasowej (najnowszej albo podanej).")
     args = parser.parse_args()
 
     wyd = WYDANIA[args.wydanie]
+    if args.przywroc or args.tylko_kopia:
+        if wyd.kod != "firma":
+            raise SystemExit("Kopia zapasowa i przywracanie dotyczą wydania firmowego (--wydanie firma).")
+        kopia = folder_kopii(args.kopia)
+        if kopia is None:
+            raise SystemExit(f"Nie wiem, gdzie jest kopia: brak {PLIK_KOPII.name} i --kopia.")
+        folder = folder_firmy(args.folder)
+        if args.przywroc:
+            return przywroc(kopia, folder, args.przywroc, wyd)
+        biezaca = update.sprawdz("0.0.0", replace(wyd, aktualizacje_folder=str(folder)))
+        kopia_zapasowa(folder, kopia, biezaca.wersja if biezaca else "nieznana", args.zachowaj)
+        return 0
+
     ver = wersja()
     instalator = znajdz_instalator(wyd, ver)
     suma, plik_sumy, plik_podpisu = podpisz(instalator, wyd, args.klucz)
 
     if wyd.kod == "firma":
-        return publikuj_folder(wyd, ver, instalator, suma, plik_sumy, plik_podpisu,
-                               args.opis, folder_firmy(args.folder))
+        folder = folder_firmy(args.folder)
+        kod = publikuj_folder(wyd, ver, instalator, suma, plik_sumy, plik_podpisu,
+                              args.opis, folder)
+        kopia = folder_kopii(args.kopia)
+        if kod == 0 and kopia is not None:
+            print("\nKopia zapasowa")
+            kopia_zapasowa(folder, kopia, ver, args.zachowaj)
+        elif kod == 0:
+            print(f"\n  (bez kopii zapasowej — wpisz folder do {PLIK_KOPII.name}, "
+                  f"np. na dysku Google Drive)")
+        return kod
     return publikuj_github(wyd, ver, instalator, plik_sumy, plik_podpisu,
                            args.opis, args.od_razu)
 
