@@ -3,7 +3,7 @@
 Jeden kod, dwa wydania — patrz core/wydanie.py.
 """
 
-__version__ = "1.5.0"
+__version__ = "1.6.3"
 __author__ = "MATCODE"
 __company__ = "MATCODE"
 #: Podpis domyślny. Wydanie może mieć własny (Wydanie.wydawca) — ten

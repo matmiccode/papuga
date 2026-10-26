@@ -182,6 +182,19 @@ class Settings:
     #: Jak podpisać użytkownika w transkrypcji własnego nagrania (lewy
     #: kanał to jego mikrofon). Puste = `imie_uzytkownika()` z Windows.
     nagranie_imie: str = ""
+    #: Obraz spotkania (od 1.6): program, którego okno idzie do MKV obok
+    #: nagrania, np. "Zoom.exe" (pusty = sam dźwięk), i tytuł okna z chwili
+    #: wyboru. Uchwyt okna jest inny przy każdym spotkaniu, więc przy starcie
+    #: nagrania okno wybiera się na nowo (wideo.wybierz_okno).
+    nagranie_okno_program: str = ""
+    nagranie_okno_tytul: str = ""
+    #: Obraz włączony (od 1.6.1; od 1.6.2 lista „Obraz” na karcie nagrywania,
+    #: „Sam dźwięk” to False). Okno i ekran puste — program sam bierze okno
+    #: spotkania (Zoom, Teams…).
+    nagranie_obraz: bool = False
+    #: Zamiast okna cały ekran (na udostępnianie ekranu): nazwa monitora
+    #: Windows, np. "\\.\DISPLAY1"; gdy go nie ma — główny. Pusta = okno albo nic.
+    nagranie_ekran: str = ""
     #: Język interfejsu: "pl", "en" albo pusty = język Windows (teksty.py).
     jezyk: str = ""
 
@@ -199,6 +212,9 @@ class Settings:
         known = {f for f in cls().__dataclass_fields__}  # type: ignore[attr-defined]
         clean = {k: v for k, v in data.items() if k in known}
         settings = cls(**clean)
+        if "nagranie_obraz" not in data:
+            # Do 1.6.0 obraz włączał sam wybór okna albo ekranu.
+            settings.nagranie_obraz = bool(settings.nagranie_okno_program or settings.nagranie_ekran)
         settings.normalize()
         return settings
 

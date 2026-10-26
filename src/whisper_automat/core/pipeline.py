@@ -461,9 +461,9 @@ class Runner:
                 self._rozpoznaj_mowcow(audio, result, index, total,
                                        source=source, info=info, tymczasowe=tymczasowe)
 
-            # Zaznaczone momenty z nagrania (przycisk „Zaznacz moment”) leżą
-            # obok pliku — trafiają do TXT i JSON w swoim miejscu.
-            result.znaczniki = nagrywanie.wczytaj_znaczniki(source)
+            # Zaznaczone fragmenty z nagrania („Zaznacz”/F8) — z tagu pliku
+            # (od 1.6.1) albo ze starego pliku obok; trafiają do TXT i JSON.
+            result.znaczniki = nagrywanie.wczytaj_znaczniki(source, info.tags)
             if result.znaczniki:
                 self.cb.log(t("Zaznaczone momenty: {n}").format(n=len(result.znaczniki)))
 

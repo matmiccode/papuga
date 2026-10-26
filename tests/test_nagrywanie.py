@@ -45,6 +45,25 @@ class OsCzasuTest(unittest.TestCase):
         self.assertTrue((os_.pobierz(1600, 1600) == 0).all())
         self.assertTrue((os_.pobierz(N.RATE * 3, 1600) == 9).all())
 
+    def test_utnij_po_pauzie(self):
+        # Pauza w 0,2 s: to, co tory oddały po tej chwili (zamykanie trwa),
+        # nie może wrócić po wznowieniu przed nowym dźwiękiem.
+        os_ = N.OsCzasu(pojemnosc=N.RATE)
+        os_.wpisz(0, np.full(4800, 3, dtype=np.int16))
+        os_.pobierz(0, 1600)
+        os_.utnij(3200)
+        self.assertEqual(os_.najdalej, 3200)
+        self.assertTrue((os_.pobierz(1600, 1600) == 3).all())
+        self.assertTrue((os_.pobierz(3200, 1600) == 0).all())
+        # Przez granicę bufora pierścieniowego i poniżej wydanego — bez szkód.
+        os_.wpisz(15000, np.full(2000, 4, dtype=np.int16))
+        os_.utnij(16000)
+        self.assertTrue((os_.pobierz(4800, 10200) == 0).all())
+        self.assertTrue((os_.pobierz(15000, 1000) == 4).all())
+        self.assertTrue((os_.pobierz(16000, 1000) == 0).all())
+        os_.utnij(0)  # już wydane — nic do kasowania
+        self.assertEqual(os_.najdalej, 16000)
+
     def test_spoznione_odrzucane(self):
         os_ = N.OsCzasu(pojemnosc=N.RATE)
         os_.pobierz(0, 3200)
@@ -259,16 +278,50 @@ class ZapisTest(unittest.TestCase):
         self.assertEqual(N.znajdz_niedokonczone(self.tmp), [])
         N.usun_znacznik(plik)
 
-    def test_znaczniki_obok_nagrania(self):
+    def test_znaczniki_obok_nagrania_stary_plik(self):
+        # Nagrania do 1.6.0: znaczniki w pliku obok (punkty, bez końca).
         plik = self.tmp / "Spotkanie 2026-10-15 11-00.flac"
         self.assertIsNone(N.zapisz_znaczniki(plik, []))
-        cel = N.zapisz_znaczniki(plik, [{"czas": 734.2, "opis": ""}, {"czas": 12.0, "opis": "decyzja"}])
-        self.assertEqual(cel.name, "Spotkanie 2026-10-15 11-00.znaczniki.json")
+        N.sciezka_znacznikow(plik).write_text(json.dumps(
+            [{"czas": 734.2, "opis": ""}, {"czas": 12.0, "opis": "decyzja"}]), encoding="utf-8")
         self.assertEqual(N.wczytaj_znaczniki(plik),
-                         [{"czas": 12.0, "opis": "decyzja"}, {"czas": 734.2, "opis": ""}])
+                         [{"czas": 12.0, "koniec": None, "opis": "decyzja"},
+                          {"czas": 734.2, "koniec": None, "opis": ""}])
         self.assertEqual(N.wczytaj_znaczniki(self.tmp / "nie ma.flac"), [])
-        cel.write_text("to nie json", encoding="utf-8")
+        N.sciezka_znacznikow(plik).write_text("to nie json", encoding="utf-8")
         self.assertEqual(N.wczytaj_znaczniki(plik), [])
+
+    def test_znaczniki_w_tagu_nagrania(self):
+        # Od 1.6.1: w nagłówku samego FLAC-a, w miejscu wypełnienia — dźwięk
+        # nie przesuwa się ani o bajt, pliku obok nie ma.
+        plik = self.tmp / "Spotkanie 2026-10-21 12-00.flac"
+        z = N.ZapisFlac(plik, kanaly=2, tagi=N.tagi_nagrania(plik))
+        dane = (np.sin(np.arange(N.RATE * 2) / 20.0) * 10000).astype(np.int16)
+        for i in range(0, dane.size, N.BLOK):
+            z.zapisz(N.przeplot(dane[i:i + N.BLOK], dane[i:i + N.BLOK]))
+        z.zamknij()
+        przed = plik.read_bytes()
+        znaczniki = [{"czas": 0.5, "koniec": 1.5, "opis": ""}, {"czas": 1.8, "koniec": None, "opis": ""}]
+        self.assertTrue(N.dopisz_tagi_flac(plik, {N.TAG_ZNACZNIKI: N.znaczniki_do_tagu(znaczniki)}))
+        po = plik.read_bytes()
+        self.assertEqual(len(po), len(przed))
+        self.assertEqual(po[-1000:], przed[-1000:])
+        self.assertFalse(N.sciezka_znacznikow(plik).exists())
+        import av
+
+        with av.open(str(plik)) as c:
+            tagi = {k.lower(): v for k, v in c.metadata.items()}
+            probki = sum(r.samples for r in c.decode(audio=0))
+        self.assertEqual(probki, N.RATE * 2)
+        self.assertEqual(tagi[N.TAG.lower()], N.TAG_WARTOSC)  # stare tagi zostają
+        self.assertEqual(N.wczytaj_znaczniki(plik, tagi), znaczniki)
+        # Drugi raz podmienia, nie dokłada.
+        self.assertTrue(N.dopisz_tagi_flac(plik, {N.TAG_ZNACZNIKI: "[]"}))
+        with av.open(str(plik)) as c:
+            self.assertEqual(c.metadata.get(N.TAG_ZNACZNIKI), "[]")
+        # Za długi tag nie mieści się w wypełnieniu — plik nietknięty.
+        self.assertFalse(N.dopisz_tagi_flac(plik, {"X": "a" * 20000}))
+        self.assertEqual(len(plik.read_bytes()), len(przed))
 
     def test_naprawa_przenosi_znaczniki(self):
         plik = self.tmp / "Spotkanie 2026-10-15 11-30.flac"
@@ -279,22 +332,52 @@ class ZapisTest(unittest.TestCase):
         z.fsync()
         z._plik.close()
         plik.write_bytes(plik.read_bytes()[:-500])
-        N.zapisz_znaczniki(plik, [{"czas": 1.0, "opis": ""}])
-        N.sciezka_znacznika(plik).write_text(json.dumps({"pid": 999999999}), encoding="utf-8")
+        # Fragmenty zaznaczone przed awarią leżą w znaczniku `.nagrywanie`.
+        N.sciezka_znacznika(plik).write_text(json.dumps(
+            {"pid": 999999999, "znaczniki": [{"czas": 0.2, "koniec": 1.0, "opis": ""}]}),
+            encoding="utf-8")
         cel = N.napraw_nagranie(plik)
-        self.assertFalse(N.sciezka_znacznikow(plik).exists())
-        self.assertEqual(N.wczytaj_znaczniki(cel), [{"czas": 1.0, "opis": ""}])
+        self.assertFalse(N.sciezka_znacznikow(cel).exists())
+        import av
 
-    def test_znacznik_tylko_w_trakcie(self):
+        with av.open(str(cel)) as c:
+            tagi = {k.lower(): v for k, v in c.metadata.items()}
+        self.assertEqual(N.wczytaj_znaczniki(cel, tagi), [{"czas": 0.2, "koniec": 1.0, "opis": ""}])
+
+    def test_zaznacz_fragmenty(self):
+        """F8: początek, F8: koniec; dwa szybkie naciśnięcia — moment."""
         n = N.Nagrywarka()
-        self.assertIsNone(n.znacznik())
+        self.assertIsNone(n.zaznacz())
         n.stan = n.NAGRYWA
         n.czas_trwania = 12.345
-        self.assertEqual(n.znacznik("x"), {"czas": 12.345, "opis": "x"})
+        pierwszy = n.zaznacz()
+        self.assertEqual((pierwszy["nr"], pierwszy["otwarty"], pierwszy["czas"]), (1, True, 12.345))
+        n.czas_trwania = 95.0
+        zamkniety = n.zaznacz()
+        self.assertEqual((zamkniety["otwarty"], zamkniety["koniec"]), (False, 95.0))
+        n.czas_trwania = 100.0
+        self.assertTrue(n.zaznacz()["otwarty"])
+        n.czas_trwania = 101.0  # po sekundzie — to był tylko moment
+        moment = n.zaznacz()
+        self.assertEqual((moment["nr"], moment["koniec"]), (2, None))
         n.stan = n.PAUZA
-        self.assertEqual(n.znacznik()["czas"], 12.345)
-        self.assertEqual(len(n.znaczniki), 2)
+        n._pozycja_pauzy = 200.0
+        self.assertEqual(n.zaznacz()["czas"], 200.0)  # w pauzie — miejsce pauzy
+        self.assertEqual([(z["czas"], z["koniec"]) for z in n.znaczniki],
+                         [(12.345, 95.0), (100.0, None), (200.0, None)])
+        # Otwarty fragment zamyka się przy końcu nagrania.
+        n._zamknij_fragment(260.0)
+        self.assertEqual(n.znaczniki[-1]["koniec"], 260.0)
         n.stan = n.BEZCZYNNA
+
+    def test_tag_znacznikow_tam_i_z_powrotem(self):
+        znaczniki = [{"czas": 734.2, "koniec": 812.0, "opis": ""}, {"czas": 900.1, "koniec": None, "opis": ""}]
+        tekst = N.znaczniki_do_tagu(znaczniki)
+        self.assertEqual(tekst, "[[734.2,812.0],[900.1,null]]")
+        self.assertEqual(N.wczytaj_znaczniki(Path("x.flac"), {N.TAG_ZNACZNIKI.lower(): tekst}),
+                         znaczniki)
+        # Śmieć w tagu — jak brak znaczników.
+        self.assertEqual(N.wczytaj_znaczniki(self.tmp / "y.flac", {N.TAG_ZNACZNIKI.lower(): "{"}), [])
 
     def test_nazwa_pliku(self):
         kiedy = datetime(2026, 10, 8, 14, 30)

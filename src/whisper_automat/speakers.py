@@ -130,7 +130,22 @@ def _zagraj_mci(plik: Path) -> None:
         raise RuntimeError(t("MCI nie rozpoczęło odtwarzania"))
 
 
-def _cisza() -> None:
+def zagraj(plik: Path) -> None:
+    """Odtwarza WAV: winsound, a gdy zawiedzie — MCI. Błąd, gdy obie drogi padną.
+
+    Wspólne z „Nagraj próbkę” w oknie źródeł nagrania.
+    """
+    ostatni: Exception = RuntimeError(t("brak metody odtwarzania"))
+    for sposob in (_zagraj_winsound, _zagraj_mci):
+        try:
+            sposob(plik)
+            return
+        except Exception as exc:
+            ostatni = exc
+    raise ostatni
+
+
+def cisza() -> None:
     """Przerywa odtwarzanie obiema drogami i zwalnia plik próbki."""
     try:
         import winsound
@@ -296,7 +311,7 @@ class SpeakerDialog:
             return
 
         _, start, dlugosc = wybrany
-        _cisza()
+        cisza()
 
         try:
             plik = self._wytnij(mowca, start, min(PROBKA_S, dlugosc))
@@ -304,26 +319,21 @@ class SpeakerDialog:
             self._powiedz(t("Nie udało się wyciąć próbki: {blad}").format(blad=exc), blad=True)
             return
 
-        ostatni: Exception = RuntimeError(t("brak metody odtwarzania"))
-        for zagraj in (_zagraj_winsound, _zagraj_mci):
-            try:
-                zagraj(plik)
-            except Exception as exc:
-                ostatni = exc
-                continue
-            # Nie da się sprawdzić z programu, czy dźwięk doszło do uszu —
-            # więc od razu podpowiadamy, gdzie szukać, gdy nie doszedł.
-            self._powiedz(
-                t("Odtwarzam MÓWCĘ {n} — fragment od {czas}, {s:.0f} s. Nie słyszysz? "
-                  "Sprawdź głośność programu {app} w mikserze Windows.").format(
-                    n=mowca + 1, czas=_czas(start), s=min(PROBKA_S, dlugosc), app=APP_NAME)
-            )
+        try:
+            zagraj(plik)
+        except Exception as exc:
+            self._powiedz(t("Nie udało się odtworzyć próbki: {blad}").format(blad=exc), blad=True)
             return
-
-        self._powiedz(t("Nie udało się odtworzyć próbki: {blad}").format(blad=ostatni), blad=True)
+        # Nie da się sprawdzić z programu, czy dźwięk doszło do uszu —
+        # więc od razu podpowiadamy, gdzie szukać, gdy nie doszedł.
+        self._powiedz(
+            t("Odtwarzam MÓWCĘ {n} — fragment od {czas}, {s:.0f} s. Nie słyszysz? "
+              "Sprawdź głośność programu {app} w mikserze Windows.").format(
+                n=mowca + 1, czas=_czas(start), s=min(PROBKA_S, dlugosc), app=APP_NAME)
+        )
 
     def _zatrzymaj(self) -> None:
-        _cisza()
+        cisza()
         self._powiedz("")
 
     def _wytnij(self, mowca: int, start: float, dlugosc: float) -> Path:
@@ -380,7 +390,7 @@ class SpeakerDialog:
         self._zamknij()
 
     def _zamknij(self) -> None:
-        _cisza()  # zwolnij plik, zanim spróbujemy go usunąć
+        cisza()  # zwolnij plik, zanim spróbujemy go usunąć
         for plik in self._tymczasowe:
             try:
                 plik.unlink(missing_ok=True)

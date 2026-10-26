@@ -98,6 +98,19 @@ class Wydanie:
         return f"{self.nazwa} – {self.haslo}" if self.haslo else self.nazwa
 
     @property
+    def osoba(self) -> str:
+        """Imię i nazwisko z podpisu autora („Jan Kowalski – Firma” → „Jan
+        Kowalski”) — w stopce jako adresat zgłoszeń, nie jako podpis."""
+        return self.autor.partition(" – ")[0].strip()
+
+    @property
+    def firma(self) -> str:
+        """Firma z podpisu autora („Jan Kowalski – Firma” → „Firma”). Pusta
+        w wydaniu publicznym; niepusta — okno „Licencja” mówi, że to program
+        firmowy. Nazwa żyje tylko w paczce, jak cały podpis."""
+        return self.autor.partition(" – ")[2].strip()
+
+    @property
     def prawa(self) -> str:
         return f"© 2026 {self.wydawca}"
 

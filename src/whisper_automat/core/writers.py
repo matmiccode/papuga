@@ -1,8 +1,8 @@
 """Zapis transkrypcji do plików: TXT, SRT, VTT, JSON.
 
-Zaznaczone momenty (`result.znaczniki`, z nagrania — przycisk „Zaznacz
-moment”) trafiają do obu TXT w miejscu, gdzie padły, i do JSON jako
-`markers`. Napisy SRT/VTT ich nie dostają — tam byłyby śmieciem na ekranie.
+Zaznaczone fragmenty i momenty (`result.znaczniki`, z nagrania — przycisk
+„Zaznacz”/F8: początek i koniec) trafiają do obu TXT w miejscu, gdzie padły,
+i do JSON jako `markers`. Napisy SRT/VTT ich nie dostają — tam byłyby śmieciem na ekranie.
 """
 
 from __future__ import annotations
@@ -52,15 +52,50 @@ def _clock(seconds: float, sep: str = ".", millis: bool = True) -> str:
 
 
 def _znaczniki(result) -> List[dict]:
-    """Zaznaczone momenty posortowane po czasie; pusta lista, gdy brak."""
+    """Zaznaczenia z nagrania posortowane po czasie; pusta lista, gdy brak.
+
+    {"czas", "koniec", "opis"}: `koniec` — fragment („Zaznacz” i drugie
+    naciśnięcie), None — pojedynczy moment.
+    """
     lista = getattr(result, "znaczniki", None) or []
     return sorted((z for z in lista if isinstance(z, dict)), key=lambda z: float(z.get("czas", 0.0)))
 
 
-def _opis_znacznika(z: dict) -> str:
-    opis = str(z.get("opis", "") or "").strip()
-    tekst = t("zaznaczony moment")
-    return f"{FLAGA} {tekst}: {opis}" if opis else f"{FLAGA} {tekst}"
+def _krotko(sekundy: float) -> str:
+    """12:14 albo 1:01:40 — czas dla czytelnika, nie dla maszyny."""
+    minuty, reszta = divmod(int(sekundy), 60)
+    godziny, minuty = divmod(minuty, 60)
+    return f"{godziny}:{minuty:02d}:{reszta:02d}" if godziny else f"{minuty}:{reszta:02d}"
+
+
+def _zdarzenia(result) -> List[dict]:
+    """Zaznaczenia jako zdarzenia w czasie, gotowe do wstawienia w tekst.
+
+    Fragment daje dwa: początek i koniec (w czystym tekście początek mówi
+    od razu, ile trwa), moment — jedno. {"czas", "txt", "czysty"}.
+    """
+    wynik = []
+    numer = 0
+    for z in _znaczniki(result):
+        czas = float(z["czas"])
+        opis = str(z.get("opis", "") or "").strip()
+        if z.get("koniec") is not None:
+            numer += 1
+            koniec = float(z["koniec"])
+            dopisek = f": {opis}" if opis else ""
+            wynik.append({"czas": czas,
+                          "txt": f"{FLAGA} " + t("Fragment {n} — początek").format(n=numer) + dopisek,
+                          "czysty": f"{FLAGA} " + t("Fragment {n}: {od}–{do}").format(
+                              n=numer, od=_krotko(czas), do=_krotko(koniec)) + dopisek})
+            wynik.append({"czas": koniec,
+                          "txt": f"{FLAGA} " + t("Fragment {n} — koniec").format(n=numer),
+                          "czysty": f"{FLAGA} " + t("koniec fragmentu {n}").format(n=numer)})
+        else:
+            tekst = t("zaznaczony moment")
+            wynik.append({"czas": czas,
+                          "txt": f"{FLAGA} {tekst}: {opis}" if opis else f"{FLAGA} {tekst}",
+                          "czysty": f"{FLAGA} {_krotko(czas)}" + (f" — {opis}" if opis else "")})
+    return sorted(wynik, key=lambda z: z["czas"])
 
 
 def _mowca(result, seg) -> str:
@@ -75,16 +110,16 @@ def _mowca(result, seg) -> str:
 def write_txt(result, path: Path) -> Path:
     """TXT z zakresem czasu przed każdym segmentem; znaczniki w swoim miejscu."""
     lines = []
-    znaczniki = _znaczniki(result)
+    znaczniki = _zdarzenia(result)
     for seg in result.segments:
-        while znaczniki and float(znaczniki[0]["czas"]) < seg.start:
+        while znaczniki and znaczniki[0]["czas"] < seg.start:
             z = znaczniki.pop(0)
-            lines.append(f"[{_clock(float(z['czas']))}]  {_opis_znacznika(z)}")
+            lines.append(f"[{_clock(z['czas'])}]  {z['txt']}")
         start = _clock(seg.start)
         end = _clock(seg.end)
         lines.append(f"[{start} --> {end}]  {_mowca(result, seg)}{seg.text.strip()}")
     for z in znaczniki:
-        lines.append(f"[{_clock(float(z['czas']))}]  {_opis_znacznika(z)}")
+        lines.append(f"[{_clock(z['czas'])}]  {z['txt']}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
 
@@ -100,16 +135,12 @@ def write_txt_plain(result, path: Path, width: int = 100) -> Path:
     #: nie potrzebuje nazwy przy każdym akapicie — to tylko szum w tekście.
     podpisany = None
 
-    znaczniki = _znaczniki(result)
+    znaczniki = _zdarzenia(result)
     #: Akapity ze znacznikiem nie są zawijane — to jedna krótka linia.
     bez_zawijania: set = set()
 
     def flaga(z: dict) -> None:
-        minuty, reszta = divmod(int(float(z["czas"])), 60)
-        godziny, minuty = divmod(minuty, 60)
-        czas = f"{godziny}:{minuty:02d}:{reszta:02d}" if godziny else f"{minuty}:{reszta:02d}"
-        opis = str(z.get("opis", "") or "").strip()
-        paragraphs.append(f"{FLAGA} {czas}" + (f" — {opis}" if opis else ""))
+        paragraphs.append(z["czysty"])
         bez_zawijania.add(len(paragraphs) - 1)
 
     for seg in result.segments:
@@ -122,12 +153,12 @@ def write_txt_plain(result, path: Path, width: int = 100) -> Path:
         zmiana_mowcy = prev_speaker is not None and speaker != prev_speaker
         przerwa = prev_end is not None and seg.start - prev_end > 2.0
         # Zaznaczony moment przed tym segmentem zamyka akapit i staje osobno.
-        znacznik_przed = bool(znaczniki) and float(znaczniki[0]["czas"]) < seg.start
+        znacznik_przed = bool(znaczniki) and znaczniki[0]["czas"] < seg.start
         if buffer and (zmiana_mowcy or przerwa or znacznik_przed):
             paragraphs.append(speaker_label + " ".join(buffer))
             buffer = []
             speaker_label = ""
-        while znaczniki and float(znaczniki[0]["czas"]) < seg.start:
+        while znaczniki and znaczniki[0]["czas"] < seg.start:
             flaga(znaczniki.pop(0))
             # Po znaczniku mówca podpisuje się na nowo — czytelnik wrócił tu z daleka.
             podpisany = None
@@ -291,7 +322,9 @@ def write_json(result, path: Path) -> Path:
         "engine": result.engine,
         "elapsed_seconds": round(result.elapsed, 2),
         "text": result.text,
-        **({"markers": [{"time": round(float(z["czas"]), 3), "label": str(z.get("opis", "") or "")}
+        **({"markers": [{"time": round(float(z["czas"]), 3),
+                         "end": None if z.get("koniec") is None else round(float(z["koniec"]), 3),
+                         "label": str(z.get("opis", "") or "")}
                         for z in _znaczniki(result)]}
            if _znaczniki(result) else {}),
         "segments": [

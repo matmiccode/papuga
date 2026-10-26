@@ -35,7 +35,7 @@ Trzy rzeczy, o które trzeba zadbać — wszystkie sprawdzone w spike'u
   (urzadzenia.punkty, ~20 ms), bez tworzenia PyAudio. Urządzenie wskazane
   z nazwy nigdy nie jest przełączane. PortAudio zna tylko domyślne
   urządzenie multimedialne; Teams używa „komunikacyjnego”, które bywa inne
-  — wtedy zostaje „Zmień…” i podpowiedź o ciszy w torze spotkania.
+  — wtedy zostaje lista „Dźwięk spotkania” i podpowiedź o ciszy w torze spotkania.
 * Dwa zegary: mikrofon i głośniki mają osobne kwarce, a każdy z nich dryfuje
   względem zegara systemowego. Każde źródło kładzie swoje próbki na wspólną
   oś czasu (OsCzasu) według czasu, który PortAudio podał przy pakiecie
@@ -46,6 +46,12 @@ Odporność: FLAC jest pisany na bieżąco, ramka po ramce; plik urwany przez
 awarię jest czytelny dla ffmpeg (brak tylko łącznej długości w nagłówku).
 Obok pliku leży znacznik `.nagrywanie` — jeśli program startuje i znajduje
 znacznik bez żywego procesu, nagranie da się odzyskać (napraw_nagranie).
+
+Obraz spotkania (od 1.6, gdy wybrano okno albo cały ekran): osobny proces ffmpeg
+(core/wideo.py), odcinek na każdy kawałek między pauzami, sklejany z tym
+plikiem do `Spotkanie ….mkv` po zatrzymaniu — w tle, transkrypcja nie
+czeka. Stan odcinków siedzi w znaczniku `.nagrywanie`, więc po awarii
+odzyskanie składa też obraz.
 """
 
 from __future__ import annotations
@@ -67,6 +73,7 @@ from typing import Callable, List, Optional, Tuple
 import numpy as np
 
 from ..teksty import t
+from . import wideo
 
 #: Częstotliwość pliku i osi czasu. Taka sama jak wejście modelu.
 RATE = 16000
@@ -99,9 +106,16 @@ TAG = "WHISPER_AUTOMAT"
 TAG_WARTOSC = "nagranie-spotkania;kanaly=mikrofon,system;wersja=1.5"
 #: Kanały pliku: 0 = mikrofon, 1 = system.
 KANALY = 2
-#: Zaznaczone momenty: plik obok nagrania, `Spotkanie ….znaczniki.json`,
-#: lista [{"czas": sekundy od startu, "opis": ""}]. Czyta go pipeline
-#: (wczytaj_znaczniki), zapisują writers do TXT i JSON.
+#: Zaznaczone fragmenty („Zaznacz”/F8: początek, drugie naciśnięcie — koniec)
+#: siedzą od 1.6.1 w tagu samego nagrania: JSON [[początek, koniec], …],
+#: koniec null = pojedynczy moment. Dopisywany po zamknięciu pliku w miejsce
+#: wypełnienia nagłówka FLAC (dopisz_tagi_flac) — bez osobnego pliku obok.
+TAG_ZNACZNIKI = "WHISPER_AUTOMAT_ZNACZNIKI"
+#: Fragment krótszy niż tyle to pojedynczy moment (dwa szybkie naciśnięcia).
+MOMENT_S = 2.0
+#: Do 1.6.0 znaczniki leżały w pliku obok nagrania, `Spotkanie ….znaczniki.json`
+#: ([{"czas", "opis"}]) — czytany dalej dla starych nagrań i jako zapas, gdy
+#: tag się nie zmieści.
 ZNACZNIKI = ".znaczniki.json"
 
 
@@ -189,6 +203,56 @@ def _znajdz(lista: List[UrzadzenieAudio], nazwa: str) -> Optional[UrzadzenieAudi
     return lista[0] if lista else None
 
 
+def nagraj_probke_mikrofonu(nazwa: str, plik: Path, sekundy: float = 5.0,
+                            poziom: Callable[[float], None] = lambda _d: None,
+                            przerwij: Optional[threading.Event] = None) -> Tuple[str, float]:
+    """Kilka sekund z mikrofonu do WAV — „Sprawdź” przy mikrofonie na karcie nagrywania.
+
+    Ten sam wybór urządzenia co w nagraniu (pusta nazwa = domyślny
+    w Windows), więc odsłuch pokazuje, jak zabrzmi spotkanie. `poziom`
+    dostaje dBFS co 100 ms (z wątku tła). Zwraca (nazwa urządzenia,
+    najgłośniejsze 100 ms w dBFS) — po tym okno mówi „prawie cisza”.
+    """
+    import wave
+
+    pa = _pa()
+    p = pa.PyAudio()
+    try:
+        wejscia, _ = _lista(p, pa)
+        u = _znajdz(wejscia, nazwa)
+        if u is None:
+            raise BladNagrywania(t("Nie znaleziono żadnego mikrofonu."))
+        kanaly = max(1, min(u.kanaly, 2))
+        blok = max(1, u.rate // 10)
+        strumien = p.open(format=pa.paFloat32, channels=kanaly, rate=u.rate, input=True,
+                          input_device_index=u.index, frames_per_buffer=blok)
+        czesci: list = []
+        szczyt = -120.0
+        try:
+            for _ in range(max(1, int(sekundy * 10))):
+                if przerwij is not None and przerwij.is_set():
+                    break
+                dane = np.frombuffer(strumien.read(blok, exception_on_overflow=False),
+                                     dtype=np.float32)
+                mono = dane.reshape(-1, kanaly).mean(axis=1) if kanaly > 1 else dane
+                czesci.append(mono)
+                db = rms_dbfs(mono)
+                szczyt = max(szczyt, db)
+                poziom(db)
+        finally:
+            strumien.stop_stream()
+            strumien.close()
+        probki = np.concatenate(czesci) if czesci else np.zeros(0, dtype=np.float32)
+        with wave.open(str(plik), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(u.rate)
+            w.writeframes((np.clip(probki, -1.0, 1.0) * 32767).astype("<i2").tobytes())
+        return u.nazwa, szczyt
+    finally:
+        p.terminate()
+
+
 def _czy_przepiac(ustawienie: str, otwarte: str, domyslne: str) -> bool:
     """Czy tor otwarty na `otwarte` ma przejść na nowe domyślne urządzenie.
 
@@ -223,6 +287,14 @@ class ZdarzeniaNagrywania:
     #: Lista urządzeń Windows (urzadzenia.PunktAudio) odświeżona w trakcie
     #: nagrania, co kilka sekund — okno pokazuje z niej linię źródeł.
     urzadzenia: Callable[[list], None] = lambda _u: None
+    #: Obraz spotkania złożony po `zakonczono`: ścieżka MKV i pusty błąd,
+    #: albo None i opis błędu (odcinki zostają obok nagrania).
+    obraz: Callable[[Optional[Path], str], None] = lambda _p, _b: None
+    #: Okno spotkania schowało się (True — zwykle udostępnianie ekranu) albo
+    #: wróciło (False); okno programu pyta wtedy o przełączenie obrazu.
+    okno_spotkania: Callable[[bool], None] = lambda _s: None
+    #: Obraz idzie już z nowego źródła (po `Nagrywarka.przelacz_obraz`).
+    zrodlo_obrazu: Callable[[object], None] = lambda _z: None
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +372,26 @@ class OsCzasu:
             self._buf[start:] = dane[:pierwsza]
             self._buf[: n - pierwsza] = dane[pierwsza:]
         self.najdalej = max(self.najdalej, poz + n)
+
+    def utnij(self, poz: int) -> None:
+        """Kasuje to, co wpisano od `poz` dalej (jeszcze nie wydane).
+
+        Pauza: dźwięk z chwil po jej naciśnięciu, dobrany z kolejek przy
+        zamykaniu torów, po wznowieniu leżałby tuż za miejscem pauzy —
+        przed nowym dźwiękiem, którego tory jeszcze nie oddały.
+        """
+        poz = max(poz, self.wydane)
+        n = min(self.najdalej - poz, self.pojemnosc)
+        if n <= 0:
+            return
+        start = poz % self.pojemnosc
+        koniec = start + n
+        if koniec <= self.pojemnosc:
+            self._buf[start:koniec] = 0
+        else:
+            self._buf[start:] = 0
+            self._buf[: koniec - self.pojemnosc] = 0
+        self.najdalej = poz
 
     def pobierz(self, od: int, n: int) -> np.ndarray:
         start = od % self.pojemnosc
@@ -558,23 +650,59 @@ def sciezka_znacznikow(plik: Path) -> Path:
 
 
 def zapisz_znaczniki(plik: Path, znaczniki: list) -> Optional[Path]:
-    """Zapisuje zaznaczone momenty obok nagrania; bez znaczników nic."""
+    """Zapas: znaczniki w pliku obok nagrania, gdy tag się nie zmieścił."""
     if not znaczniki:
         return None
     cel = sciezka_znacznikow(plik)
     cel.write_text(json.dumps(
-        [{"czas": round(float(z.get("czas", 0.0)), 3), "opis": str(z.get("opis", ""))}
+        [{"czas": round(float(z.get("czas", 0.0)), 3),
+          "koniec": None if z.get("koniec") is None else round(float(z["koniec"]), 3),
+          "opis": str(z.get("opis", ""))}
          for z in znaczniki],
         ensure_ascii=False, indent=2), encoding="utf-8")
     return cel
 
 
-def wczytaj_znaczniki(plik: Path) -> list:
-    """Znaczniki leżące obok pliku (dowolnego — nie tylko własnego nagrania).
+def znaczniki_do_tagu(znaczniki: list) -> str:
+    """[{"czas", "koniec"}] → zwarty JSON do tagu: [[734.2,812.0],[900.1,null]]."""
+    return json.dumps([[round(float(z["czas"]), 3),
+                        None if z.get("koniec") is None else round(float(z["koniec"]), 3)]
+                       for z in znaczniki], separators=(",", ":"))
 
-    Zwraca listę {"czas": float, "opis": str} posortowaną po czasie; pustą,
-    gdy pliku nie ma albo jest nieczytelny.
+
+def _znaczniki_z_listy(dane) -> list:
+    wynik = []
+    for wpis in dane if isinstance(dane, list) else []:
+        try:
+            if isinstance(wpis, (list, tuple)):
+                czas, koniec = float(wpis[0]), (None if len(wpis) < 2 or wpis[1] is None
+                                                else float(wpis[1]))
+                opis = ""
+            else:
+                czas = float(wpis.get("czas", 0.0))
+                koniec = None if wpis.get("koniec") is None else float(wpis["koniec"])
+                opis = str(wpis.get("opis", "") or "")
+        except (AttributeError, TypeError, ValueError, IndexError):
+            continue
+        wynik.append({"czas": czas, "koniec": koniec if koniec is None or koniec > czas else None,
+                      "opis": opis})
+    return sorted(wynik, key=lambda z: z["czas"])
+
+
+def wczytaj_znaczniki(plik: Path, tagi: Optional[dict] = None) -> list:
+    """Zaznaczone fragmenty nagrania: z tagu pliku (od 1.6.1), a gdy go nie
+    ma — ze starego pliku `.znaczniki.json` obok (dowolnego nagrania).
+
+    `tagi` — `MediaInfo.tags` (klucze małymi literami), żeby nie pytać
+    ffprobe drugi raz. Zwraca [{"czas", "koniec" (None = moment), "opis"}]
+    posortowane po czasie; pustą listę, gdy nic nie ma.
     """
+    tekst = (tagi or {}).get(TAG_ZNACZNIKI.lower())
+    if tekst:
+        try:
+            return _znaczniki_z_listy(json.loads(tekst))
+        except ValueError:
+            pass
     sciezka = sciezka_znacznikow(plik)
     if not sciezka.is_file():
         return []
@@ -584,14 +712,67 @@ def wczytaj_znaczniki(plik: Path) -> list:
         return []
     if isinstance(dane, dict):
         dane = dane.get("znaczniki", [])
-    wynik = []
-    for wpis in dane if isinstance(dane, list) else []:
-        try:
-            wynik.append({"czas": float(wpis.get("czas", 0.0)),
-                          "opis": str(wpis.get("opis", "") or "")})
-        except (AttributeError, TypeError, ValueError):
-            continue
-    return sorted(wynik, key=lambda z: z["czas"])
+    return _znaczniki_z_listy(dane)
+
+
+def dopisz_tagi_flac(plik: Path, tagi: dict) -> bool:
+    """Dopisuje (albo podmienia) tagi gotowego FLAC-a w miejscu, bez
+    przepisywania dźwięku — tak jak metaflac.
+
+    Nowy blok VORBIS_COMMENT rośnie kosztem bloku PADDING (ffmpeg zostawia
+    8 KB), więc dźwięk nie przesuwa się ani o bajt. False — inny układ
+    pliku albo za mało miejsca; plik zostaje wtedy nietknięty.
+    """
+    import struct
+
+    with open(plik, "r+b") as f:
+        if f.read(4) != b"fLaC":
+            return False
+        bloki = []
+        while True:
+            naglowek = f.read(4)
+            if len(naglowek) < 4:
+                return False
+            dlugosc = int.from_bytes(naglowek[1:], "big")
+            bloki.append([naglowek[0] & 0x7F, f.read(dlugosc)])
+            if naglowek[0] & 0x80:
+                break
+        rozmiar = f.tell()
+        komentarz = next((b for b in bloki if b[0] == 4), None)
+        wypelnienie = next((b for b in bloki if b[0] == 1), None)
+        if komentarz is None or wypelnienie is None:
+            return False
+        dane = komentarz[1]
+        dl_dostawcy = struct.unpack_from("<I", dane, 0)[0]
+        dostawca = dane[4:4 + dl_dostawcy]
+        pozycja = 4 + dl_dostawcy
+        ile = struct.unpack_from("<I", dane, pozycja)[0]
+        pozycja += 4
+        wpisy = []
+        klucze = {k.upper() for k in tagi}
+        for _ in range(ile):
+            dl = struct.unpack_from("<I", dane, pozycja)[0]
+            wpis = dane[pozycja + 4:pozycja + 4 + dl]
+            pozycja += 4 + dl
+            if wpis.split(b"=", 1)[0].decode("utf-8", "replace").upper() not in klucze:
+                wpisy.append(wpis)
+        wpisy += [f"{k}={v}".encode("utf-8") for k, v in tagi.items()]
+        nowy = (struct.pack("<I", len(dostawca)) + dostawca + struct.pack("<I", len(wpisy))
+                + b"".join(struct.pack("<I", len(w)) + w for w in wpisy))
+        nowe_wypelnienie = len(wypelnienie[1]) - (len(nowy) - len(dane))
+        if nowe_wypelnienie < 0:
+            return False
+        komentarz[1] = nowy
+        wypelnienie[1] = bytes(nowe_wypelnienie)
+        wynik = bytearray(b"fLaC")
+        for i, (typ, tresc) in enumerate(bloki):
+            ostatni = 0x80 if i == len(bloki) - 1 else 0
+            wynik += bytes([typ | ostatni]) + len(tresc).to_bytes(3, "big") + tresc
+        if len(wynik) != rozmiar:
+            return False
+        f.seek(0)
+        f.write(wynik)
+    return True
 
 
 def _proces_zyje(pid: int) -> bool:
@@ -652,11 +833,19 @@ def napraw_nagranie(plik: Path) -> Path:
     Dekoduje, ile się da (ostatni, urwany blok pomija), koduje na nowo do
     `<nazwa> (odzyskane).flac` — z tą samą liczbą kanałów i tagami, żeby
     odzyskane nagranie dalej było „własne” dla transkrypcji — usuwa
-    uszkodzony plik i znacznik.
+    uszkodzony plik i znacznik. Obraz spotkania, jeśli był (odcinki
+    w znaczniku), składa z odzyskanym dźwiękiem; gdy się nie da, odcinki
+    zostają obok — każdy da się obejrzeć osobno.
     """
     import av
 
     plik = Path(plik)
+    try:
+        stan = json.loads(sciezka_znacznika(plik).read_text(encoding="utf-8"))
+        odcinki_obrazu = stan.get("obraz") or []
+        znaczniki = _znaczniki_z_listy(stan.get("znaczniki") or [])
+    except (OSError, ValueError, AttributeError):
+        odcinki_obrazu, znaczniki = [], []
     cel = plik.with_name(f"{plik.stem} (odzyskane){plik.suffix}")
     licznik = 2
     while cel.exists():
@@ -671,6 +860,9 @@ def napraw_nagranie(plik: Path) -> Path:
             tagi = dict(zrodlo.metadata or {})
             if TAG in tagi:
                 tagi["title"] = cel.stem
+            if znaczniki:
+                # Fragment otwarty w chwili awarii zostaje momentem.
+                tagi[TAG_ZNACZNIKI] = znaczniki_do_tagu(znaczniki)
             zapis = ZapisFlac(cel, kanaly=kanaly, tagi=tagi)
             res = av.AudioResampler(format="s16", layout="stereo" if kanaly == 2 else "mono",
                                     rate=RATE)
@@ -698,6 +890,13 @@ def napraw_nagranie(plik: Path) -> Path:
         try:
             stare_znaczniki.replace(sciezka_znacznikow(cel))
         except OSError:
+            pass
+    sciezka_ff = wideo.ffmpeg() if odcinki_obrazu else None
+    if sciezka_ff:
+        try:
+            wideo.zloz_odcinki(sciezka_ff, cel, odcinki_obrazu, kanaly=kanaly,
+                               znaczniki=znaczniki or wczytaj_znaczniki(cel))
+        except Exception:
             pass
     return cel
 
@@ -801,11 +1000,24 @@ class Nagrywarka:
         #: Pozycja w pliku (s), w której weszła pauza — znacznik w pauzie
         #: wskazuje ją, nie licznik, który idzie z opóźnieniem bufora.
         self._pozycja_pauzy = 0.0
+        #: Okno albo ekran nagrywany obok dźwięku (None = sam dźwięk).
+        self._zrodlo_obrazu: Optional[wideo.ZrodloObrazu] = None
+        #: Wątek składający obraz po zatrzymaniu (patrz czekaj_na_obraz).
+        self._skladanie: Optional[threading.Thread] = None
+        #: Prośba o inne źródło obrazu w trakcie nagrania (przelacz_obraz).
+        self._zmiana_obrazu: Optional[wideo.ZrodloObrazu] = None
+        #: Fragment zaczęty „Zaznacz”, jeszcze bez końca (wpis z self.znaczniki).
+        self._otwarty: Optional[dict] = None
+        #: Treść znacznika `.nagrywanie` (do odzyskania po awarii) — pisana
+        #: z wątku nagrywania (urządzenia, obraz) i z okna (zaznaczenia).
+        self._stan_pliku: dict = {}
+        self._blokada_stanu = threading.Lock()
 
     # -- sterowanie --------------------------------------------------------
 
     def start(self, katalog: Path, mikrofon: str = "", glosniki: str = "",
-              zdarzenia: Optional[ZdarzeniaNagrywania] = None) -> Path:
+              zdarzenia: Optional[ZdarzeniaNagrywania] = None,
+              zrodlo_obrazu: Optional[wideo.ZrodloObrazu] = None) -> Path:
         if self.stan != self.BEZCZYNNA:
             raise BladNagrywania(t("Nagrywanie już trwa."))
         if not dostepne():
@@ -820,7 +1032,12 @@ class Nagrywarka:
         if wolne < MIN_WOLNE_B:
             raise BladNagrywania(t(
                 "Za mało miejsca na dysku ({mb:.0f} MB wolne). "
-                "Godzina nagrania to około 50 MB.").format(mb=wolne / 1e6))
+                "Godzina nagrania to około 80 MB.").format(mb=wolne / 1e6))
+        if zrodlo_obrazu is not None and wolne < wideo.MIN_WOLNE_B:
+            raise BladNagrywania(t(
+                "Za mało miejsca na dysku na nagranie z obrazem ({mb:.0f} MB wolne, "
+                "potrzeba co najmniej 3 GB). Zwolnij miejsce albo w polu „Obraz” "
+                "wybierz „Sam dźwięk — bez obrazu”.").format(mb=wolne / 1e6))
 
         self._zdarzenia = zdarzenia or ZdarzeniaNagrywania()
         self._stop.clear()
@@ -829,6 +1046,10 @@ class Nagrywarka:
         self.sciezka = nazwa_pliku(katalog)
         self.czas_trwania = 0.0
         self.znaczniki = []
+        self._otwarty = None
+        self._stan_pliku = {}
+        self._zrodlo_obrazu = zrodlo_obrazu
+        self._zmiana_obrazu = None
         self.stan = self.STARTUJE
         self._watek = threading.Thread(
             target=self._praca, args=(mikrofon, glosniki), daemon=True,
@@ -859,19 +1080,69 @@ class Nagrywarka:
         if self.stan == self.PAUZA:
             self._pauza.clear()
 
-    def znacznik(self, opis: str = "") -> Optional[dict]:
-        """Zaznacza bieżący moment; zapis obok nagrania przy zamknięciu."""
-        if self.stan not in (self.NAGRYWA, self.PAUZA):
-            return None
+    def przelacz_obraz(self, zrodlo: "wideo.ZrodloObrazu") -> None:
+        """Obraz z innego okna albo ekranu, bez przerywania nagrania.
+
+        Wątek roboczy zamyka odcinek i otwiera nowy, dźwięk idzie dalej;
+        potwierdza przez `zdarzenia.zrodlo_obrazu`. Nagranie bez obrazu —
+        nic (obrazu nie da się dołączyć w trakcie).
+        """
+        if self.stan in (self.NAGRYWA, self.PAUZA):
+            self._zmiana_obrazu = zrodlo
+
+    def _teraz_w_pliku(self) -> float:
         czas = self.czas_trwania
         if self.stan == self.PAUZA:
             czas = max(czas, self._pozycja_pauzy)
         elif self._zegar is not None and self._teraz is not None:
             # Dokładniej niż licznik, który idzie z opóźnieniem bufora.
             czas = max(czas, self._zegar.pozycja(self._teraz()) / RATE)
-        wpis = {"czas": round(float(czas), 3), "opis": str(opis or "")}
-        self.znaczniki.append(wpis)
+        return round(float(czas), 3)
+
+    def zaznacz(self) -> Optional[dict]:
+        """„Zaznacz” (F8): pierwsze naciśnięcie zaczyna fragment, drugie go kończy.
+
+        Zwraca wpis {"czas", "koniec", "opis", "nr", "otwarty"}: `otwarty`
+        True — fragment trwa; False — zamknięty (`koniec` None, gdy trwał
+        krócej niż MOMENT_S — wtedy to pojedynczy moment). `nr` — numer
+        fragmentu od 1 (momenty się nie liczą). None, gdy nic się nie nagrywa.
+        """
+        # Także w trakcie startu (do kilku sekund: urządzenia, obraz) — wtedy
+        # to początek nagrania; inaczej F8 zaraz po „Nagrywaj” ginął bez śladu.
+        if self.stan not in (self.STARTUJE, self.NAGRYWA, self.PAUZA):
+            return None
+        teraz = self._teraz_w_pliku()
+        if self._otwarty is None:
+            wpis = {"czas": teraz, "koniec": None, "opis": ""}
+            self.znaczniki.append(wpis)
+            self._otwarty = wpis
+            otwarty = True
+        else:
+            wpis = self._zamknij_fragment(teraz)
+            otwarty = False
+        self._zapisz_stan(znaczniki=self.znaczniki)
+        # Numer jak w transkrypcji (writers): liczą się tylko fragmenty, nie momenty.
+        nr = 1 + sum(1 for z in self.znaczniki if z is not wpis and z.get("koniec") is not None)
+        return dict(wpis, nr=nr, otwarty=otwarty)
+
+    def _zamknij_fragment(self, koniec: float) -> dict:
+        wpis = self._otwarty
+        assert wpis is not None
+        self._otwarty = None
+        wpis["koniec"] = koniec if koniec - wpis["czas"] >= MOMENT_S else None
         return wpis
+
+    def _zapisz_stan(self, **zmiany) -> None:
+        """Znacznik `.nagrywanie` od nowa, z tym co wiadomo — z dowolnego wątku."""
+        plik = self.sciezka
+        if plik is None:
+            return
+        with self._blokada_stanu:
+            self._stan_pliku.update(zmiany)
+            try:
+                zapisz_znacznik(plik, **self._stan_pliku)
+            except (OSError, TypeError, ValueError):
+                pass
 
     def czekaj(self, timeout: Optional[float] = None) -> bool:
         """Czeka na koniec wątku (do zamykania okna). True, gdy skończył."""
@@ -879,6 +1150,36 @@ class Nagrywarka:
             return True
         self._watek.join(timeout)
         return not self._watek.is_alive()
+
+    @property
+    def sklada_obraz(self) -> bool:
+        return self._skladanie is not None and self._skladanie.is_alive()
+
+    def czekaj_na_obraz(self, timeout: Optional[float] = None) -> bool:
+        """Czeka, aż obraz spotkania zostanie złożony (zamykanie programu).
+
+        Godzina składa się w ~20 s. Gdy czas minie, odcinki i lista zostają
+        obok nagrania — `wideo.dokoncz_skladanie` dokończy przy następnym starcie.
+        """
+        if self._skladanie is None:
+            return True
+        self._skladanie.join(timeout)
+        return not self._skladanie.is_alive()
+
+    def _zloz_obraz(self, obraz: "wideo.ObrazSpotkania", zd: ZdarzeniaNagrywania) -> None:
+        znaczniki = [dict(z) for z in self.znaczniki]
+
+        def praca() -> None:
+            try:
+                cel = obraz.zloz(znaczniki)
+            except Exception as exc:
+                zd.obraz(None, str(exc))
+                return
+            if cel is not None:
+                zd.obraz(cel, "")
+
+        self._skladanie = threading.Thread(target=praca, daemon=True, name="obraz-skladanie")
+        self._skladanie.start()
 
     @property
     def trwa(self) -> bool:
@@ -893,6 +1194,7 @@ class Nagrywarka:
         tory = {}
         cichy = None
         zapis = None
+        obraz: Optional[wideo.ObrazSpotkania] = None
         plik = self.sciezka
         assert plik is not None
         try:
@@ -952,13 +1254,28 @@ class Nagrywarka:
                 for k, t in tory.items()
             }
 
-            zapisz_znacznik(plik, mikrofon=mik.nazwa if mik else "",
-                            system=wy.nazwa if wy else "")
+            self._zapisz_stan(mikrofon=mik.nazwa if mik else "", system=wy.nazwa if wy else "")
             zapis = ZapisFlac(plik, kanaly=KANALY, tagi=tagi_nagrania(plik))
             #: Na jakim urządzeniu stoi każdy tor — do podążania za domyślnym.
             otwarte = {"mikrofon": mik.nazwa if mik else "", "system": wy.nazwa if wy else ""}
             ustawienia = {"mikrofon": mikrofon_nazwa, "system": glosniki_nazwa}
             self.stan = self.NAGRYWA
+
+            #: Czas QPC (perf_counter) → sekundy pliku: tak obraz spotkania
+            #: dostaje miejsce swojej pierwszej klatki (core/wideo.py).
+            def pozycja_s(perf: float) -> float:
+                return zegar.pozycja(perf + przesuniecie[0]) / RATE
+
+            if self._zrodlo_obrazu is not None:
+                sciezka_ff = wideo.ffmpeg()
+                if sciezka_ff is None:
+                    zd.ostrzezenie(t("Ten ffmpeg nie umie nagrywać okien — nagrywam sam dźwięk."))
+                else:
+                    obraz = wideo.ObrazSpotkania(
+                        self._zrodlo_obrazu, plik, sciezka_ff, ostrzezenie=zd.ostrzezenie,
+                        zapisz_stan=lambda odcinki: self._zapisz_stan(obraz=odcinki),
+                        zmiana_okna=zd.okno_spotkania)
+                    obraz.ruszaj(0.0)
 
             wydane = 0
             ostatni_fsync = ostatnie_poziomy = ostatni_czas = teraz()
@@ -974,9 +1291,21 @@ class Nagrywarka:
                 chwila = teraz()
                 if chwila - ostatnia_petla > MAX_LUKA_S and t_pauzy is None:
                     # Komputer spał. Zamiast pół godziny ciszy — sekunda.
+                    # Obraz jak przy pauzie: odcinek do zaśnięcia, nowy od teraz.
+                    if obraz is not None:
+                        obraz.stoj(zegar.pozycja(ostatnia_petla) / RATE)
                     zegar.przesuniecie += (chwila - ostatnia_petla) - 1.0
                     zd.ostrzezenie(t("Komputer był uśpiony — w nagraniu zostaje sekunda przerwy."))
+                    if obraz is not None:
+                        obraz.ruszaj(zegar.pozycja(chwila) / RATE)
                 ostatnia_petla = chwila
+
+                if self._zmiana_obrazu is not None:
+                    nowe, self._zmiana_obrazu = self._zmiana_obrazu, None
+                    if obraz is not None:
+                        obraz.przelacz(nowe, zegar.pozycja(chwila) / RATE,
+                                       w_pauzie=t_pauzy is not None)
+                        zd.zrodlo_obrazu(nowe)
 
                 if self._pauza.is_set() and t_pauzy is None:
                     # Wejście w pauzę: dobierz resztki, zamknij tory i ciszę.
@@ -993,10 +1322,15 @@ class Nagrywarka:
                         cichy = None
                     t_pauzy = chwila
                     self._pozycja_pauzy = zegar.pozycja(chwila) / RATE
+                    for os_ in osie.values():
+                        os_.utnij(zegar.pozycja(chwila))
                     martwe.clear()
                     self.stan = self.PAUZA
                     zd.poziomy(-120.0, -120.0)
                     zd.pauza(True)
+                    if obraz is not None:
+                        # Klatki złapane po tej chwili ucina składanie (outpoint).
+                        obraz.stoj(self._pozycja_pauzy)
                     continue
                 if t_pauzy is not None:
                     if self._pauza.is_set():
@@ -1024,6 +1358,11 @@ class Nagrywarka:
                     zd.pauza(False)
                     if not tory:
                         raise BladNagrywania(t("Po pauzie nie ma z czego nagrywać."))
+                    if obraz is not None:
+                        obraz.ruszaj(zegar.pozycja(chwila) / RATE)
+
+                if obraz is not None:
+                    obraz.dogon(pozycja_s)
 
                 for nazwa, tor in list(tory.items()):
                     zrodla[nazwa].przyjmij_wiele((tp, d) for tp, d, _s in tor.zbierz())
@@ -1088,6 +1427,11 @@ class Nagrywarka:
                     zapis.fsync()
 
             # Koniec: zatrzymaj strumienie, dobierz resztki, domknij plik.
+            if obraz is not None:
+                if self._anuluj.is_set():
+                    obraz.porzuc()
+                else:
+                    obraz.stoj(zegar.pozycja(teraz()) / RATE)
             for tor in tory.values():
                 tor.zamknij()
             if cichy is not None:
@@ -1109,17 +1453,26 @@ class Nagrywarka:
                     # Stop zaraz po starcie — nie ma czego zapisywać.
                     zapis.porzuc()
                     zapis = None
+                    if obraz is not None:
+                        obraz.porzuc()
                     usun_znacznik(plik)
                     self.stan = self.BEZCZYNNA
                     zd.anulowano()
                     return
                 zapis.zamknij()
                 zapis = None
+                if self._otwarty is not None:
+                    # Fragment zaczęty, a nagranie się skończyło — koniec tu.
+                    self._zamknij_fragment(self.czas_trwania)
+                if self.znaczniki:
+                    # Do samego nagrania, nie do pliku obok (od 1.6.1).
+                    try:
+                        if not dopisz_tagi_flac(plik, {TAG_ZNACZNIKI: znaczniki_do_tagu(self.znaczniki)}):
+                            zapisz_znaczniki(plik, self.znaczniki)
+                    except OSError as exc:
+                        zd.ostrzezenie(t("Nie udało się zapisać zaznaczonych momentów: {blad}")
+                                       .format(blad=exc))
                 usun_znacznik(plik)
-                try:
-                    zapisz_znaczniki(plik, self.znaczniki)
-                except OSError as exc:
-                    zd.ostrzezenie(t("Nie udało się zapisać zaznaczonych momentów: {blad}").format(blad=exc))
                 self.statystyki = {
                     nazwa: {"luki": z.luki, "wyprzedzenia": z.wyprzedzenia,
                             "korekty": z.korekty, "odrzucone": z.os.odrzucone}
@@ -1127,6 +1480,8 @@ class Nagrywarka:
                 }
                 self.stan = self.BEZCZYNNA
                 zd.zakonczono(plik, self.czas_trwania)
+                if obraz is not None and obraz.odcinki:
+                    self._zloz_obraz(obraz, zd)
             else:
                 zapis.porzuc()
                 zapis = None
@@ -1144,19 +1499,39 @@ class Nagrywarka:
                     cichy.close()
                 except Exception:
                     pass
+            zachowany = False
             if zapis is not None:
                 try:
                     if zapis.probki > 0:
                         zapis.zamknij()
+                        zachowany = True
+                        if self._otwarty is not None:
+                            self._zamknij_fragment(self.czas_trwania)
+                        if self.znaczniki and not dopisz_tagi_flac(
+                                plik, {TAG_ZNACZNIKI: znaczniki_do_tagu(self.znaczniki)}):
+                            zapisz_znaczniki(plik, self.znaczniki)
                         usun_znacznik(plik)
                     else:
                         zapis.porzuc()
                         usun_znacznik(plik)
                 except Exception:
                     pass
+            if obraz is not None:
+                try:
+                    obraz.stoj(self.czas_trwania)
+                    if zachowany and obraz.odcinki:
+                        self._zloz_obraz(obraz, zd)
+                    elif not zachowany:
+                        obraz.porzuc()
+                except Exception:
+                    pass
             self.stan = self.BEZCZYNNA
             zd.blad(komunikat)
         finally:
+            if obraz is not None:
+                # Żaden ffmpeg nie może przeżyć nagrania (składanie ma własny).
+                for odcinek in obraz.odcinki:
+                    odcinek.zabij()
             self._zegar = self._teraz = None
             for inst in instancje:
                 try:

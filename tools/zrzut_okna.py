@@ -6,8 +6,12 @@ Kolejkę wypełnia udawanymi plikami.
 
     .venv\\Scripts\\python.exe tools\\zrzut_okna.py zrzut.png [tryb]
 
-Tryby: pusty, kolejka, dziennik, baner, mowcy, pomoc, nagrywanie.
-Zmienne: WHISPER_AUTOMAT_WYDANIE=firma|papuga (domyślnie papuga),
+Tryby: pusty, kolejka, dziennik, baner, mowcy, pomoc, licencja (wydanie firmowe),
+nagrywanie, zrodla (karta nagrywania na udawanych urządzeniach i oknach), glos,
+wynik, dymek (pytanie przy udostępnianiu ekranu), dymek-okno (po nim),
+strona (kolejka + zrodla, neutralny folder wyników i imię — zrzut na stronę).
+Zmienne: WHISPER_AUTOMAT_WYDANIE=firma|papuga (domyślnie papuga), ZRZUT_EKRAN=1
+(w trybie zrodla wybrany „Cały ekran” zamiast okna Zoom),
 WHISPER_AUTOMAT_JEZYK=pl|en (język okna; domyślnie język Windows),
 ZRZUT_GEOM=980x660 (rozmiar okna).
 
@@ -53,7 +57,7 @@ if os.environ.get("ZRZUT_GEOM"):
 
 
 def przygotuj():
-    if tryb in ("kolejka", "dziennik", "baner"):
+    if tryb in ("kolejka", "dziennik", "baner", "strona"):
         pliki = ["Wywiad z burmistrzem — część 1.mp4", "Spotkanie zespołu 2026-09-28.m4a",
                  "notatka głosowa.ogg", "Wykład 3 — termodynamika.mkv"]
         statusy = [t("✓  gotowe, {x:.1f}× szybciej").format(x=11.8), t("przetwarzanie…"),
@@ -81,7 +85,7 @@ def przygotuj():
                                         .format(app=A.APP_TITLE, nowa="1.5.0", obecna="1.4.0"))
         aplikacja.baner.grid()
     if tryb == "wynik":
-        # Pasek „Transkrypcja zakończona” nad kolejką z gotowymi plikami.
+        # Nakładka „Transkrypcja zakończona” na kolejce z gotowymi plikami.
         pliki = ["Spotkanie zespołu 2026-10-14.flac", "Wywiad z burmistrzem — część 1.mp4"]
         for i, nazwa in enumerate(pliki):
             iid = aplikacja.tree.insert("", "end", text=nazwa, values=(
@@ -94,12 +98,14 @@ def przygotuj():
             pliki=A._liczba_plikow(2)))
         aplikacja.overall_progress["value"] = 1000
         aplikacja.file_progress["value"] = 1000
-        aplikacja.baner_wynik_tekst.configure(
-            text=t("Transkrypcja zakończona — {pliki} w folderze wyników.").format(
-                pliki=A._liczba_plikow(2)))
-        aplikacja.baner_wynik.grid()
+        aplikacja._zwroc_uwage = lambda: None  # bez mignięcia i dźwięku przy zrzucie
+        aplikacja._pokaz_wynik(
+            t("Transkrypcja zakończona — {pliki} w folderze wyników.").format(
+                pliki=A._liczba_plikow(2)), ok=True)
     if tryb == "pomoc":
         aplikacja.pokaz_pomoc()
+    if tryb == "licencja":
+        aplikacja.pokaz_licencje()
     if tryb == "glos":
         # Okno „Dodaj mój głos do bazy” na udawanej, pustej bazie.
         from whisper_automat import glosy_okno
@@ -122,11 +128,32 @@ def przygotuj():
         aplikacja.rec_pauza_btn.configure(state="normal")
         aplikacja.rec_znacznik_btn.configure(state="normal")
         aplikacja.start_btn.configure(state="disabled")
+        # Jak w trakcie nagrania okna Zoom: listy zablokowane, lista obrazu
+        # pokazuje okno, obok „⇄ Cały ekran”.
+        from whisper_automat.core import wideo as W
+
+        aplikacja._nagrywa = lambda: True
+        aplikacja._obraz_teraz = W.Okno(101, "Spotkanie Zoom", "Zoom.exe", 1600, 900)
+        aplikacja.rec_sprawdz_btn.configure(state="disabled")
+        aplikacja._odswiez_zrodla()
+        aplikacja._ustaw_przycisk_obrazu()
         aplikacja.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
-    if tryb == "zrodla":
-        # Okno „Źródła nagrania” na udawanych urządzeniach: laptop z monitorem
-        # po HDMI i zestawem USB (zrzut pokazuje samo okno).
+    if tryb in ("dymek", "dymek-okno"):
+        # Dymek przy udostępnianiu ekranu (dwa udawane monitory) albo po nim.
+        from whisper_automat.core import wideo as W
+
+        W.ekrany = lambda: [W.Ekran(201, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True),
+                            W.Ekran(202, "\\\\.\\DISPLAY2", 2, 1920, 1080, nazwa="BenQ G2420HDB")]
+        if tryb == "dymek":
+            aplikacja._dymek_caly_ekran()
+        else:
+            aplikacja._dymek_okno()
+    if tryb in ("zrodla", "strona"):
+        # Karta nagrywania na udawanych urządzeniach i oknach: laptop
+        # z monitorem po HDMI i zestawem USB, otwarte Zoom i Teams — na
+        # zrzucie nie ma nazw z komputera, na którym się go robi.
         from whisper_automat.core import urzadzenia as U
+        from whisper_automat.core import wideo as W
 
         punkty = [
             U.PunktAudio("Głośniki (Realtek(R) Audio)", False, U.GLOSNIKI, U.WBUDOWANE,
@@ -141,18 +168,32 @@ def przygotuj():
             U.PunktAudio("Mikrofon zestawu słuchawkowego (Poly Blackwire 3320 Series)", True,
                          U.ZESTAW, U.USB, id="m2"),
         ]
-        from whisper_automat.core import nagrywanie as N
-
-        # Okno ładuje listę w wątku — podstawiamy mu udawane źródła.
-        N.lista_urzadzen = lambda: (
-            [N.UrzadzenieAudio(i, p.nazwa, 2, 48000) for i, p in enumerate(punkty) if p.wejscie],
-            [N.UrzadzenieAudio(i, p.nazwa, 2, 48000, loopback_index=i)
-             for i, p in enumerate(punkty) if not p.wejscie])
+        okna = [W.Okno(101, "Spotkanie Zoom", "Zoom.exe", 1600, 900),
+                W.Okno(102, "Przegląd projektu | Microsoft Teams", "ms-teams.exe", 1400, 900),
+                W.Okno(103, "Czat | Microsoft Teams", "ms-teams.exe", 1400, 900),
+                W.Okno(104, "Notatki — Notatnik", "notepad.exe", 900, 700,
+                       zminimalizowane=True)]
         U.punkty = lambda: punkty
-        aplikacja.settings.nagranie_mikrofon = punkty[4].nazwa
-        aplikacja.settings.nagranie_glosniki = punkty[2].nazwa
-        aplikacja.wybierz_urzadzenia()
-
+        W.okna = lambda: okna
+        W.ekrany = lambda: [W.Ekran(201, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True),
+                            W.Ekran(202, "\\\\.\\DISPLAY2", 2, 1920, 1080, nazwa="BenQ G2420HDB")]
+        aplikacja._punkty = punkty
+        aplikacja._obraz_dostepny = True
+        s = aplikacja.settings
+        s.nagranie_mikrofon = punkty[4].nazwa
+        s.nagranie_glosniki = punkty[2].nazwa
+        s.nagranie_obraz = True
+        if os.environ.get("ZRZUT_EKRAN"):
+            s.nagranie_ekran = "\\\\.\\DISPLAY1"
+        else:
+            s.nagranie_okno_program = "Zoom.exe"
+            s.nagranie_okno_tytul = "Spotkanie Zoom"
+        aplikacja._odswiez_zrodla()
+    if tryb == "strona":
+        # Bez ścieżek i nazwy konta z komputera, na którym robi się zrzut.
+        aplikacja.outdir_var.set(r"C:\Users\Anna\Documents\Transkrypcje")
+        aplikacja.imie_var.set("Anna")
+        aplikacja.rec_auto_var.set(True)
 
 def przechwyc(hwnd):
     """Obraz okna przez PrintWindow — bez wyciągania go na wierzch.
@@ -205,10 +246,14 @@ def zrob():
         p = aplikacja._pomoc
         p.update()
         hwnd = ctypes.windll.user32.GetParent(p.winfo_id())
-    elif tryb == "zrodla":
-        okno = aplikacja._okno_urzadzen[0]
+    elif tryb == "licencja":
+        p = aplikacja._licencja
+        p.update()
+        hwnd = ctypes.windll.user32.GetParent(p.winfo_id())
+    elif tryb in ("dymek", "dymek-okno"):
+        okno = aplikacja._dymek.okno
         okno.update()
-        hwnd = ctypes.windll.user32.GetParent(okno.winfo_id())
+        hwnd = aplikacja._dymek._hwnd()
     elif tryb == "glos":
         okno = aplikacja._okno_glosu.win
         okno.update()

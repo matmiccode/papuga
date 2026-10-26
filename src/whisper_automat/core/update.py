@@ -335,7 +335,9 @@ def _sprawdz_folder(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
         # Windows zgłasza niedostępny udział tak samo jak brak pliku, więc
         # sprawdzamy sam folder, zanim spytamy o plik.
         raise UpdateError(t(
-            "Folder z aktualizacjami jest niedostępny (poza siecią firmową?):\n{folder}"
+            "Ten komputer nie widzi folderu z aktualizacjami — pewnie jest poza siecią "
+            "firmy. Program działa normalnie, a nowa wersja przyjdzie sama, gdy komputer "
+            "wróci do sieci firmowej.\n\n{folder}"
         ).format(folder=folder))
     try:
         dane = json.loads(_czytaj_z_folderu(folder, MANIFEST).decode("utf-8"))

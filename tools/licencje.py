@@ -361,17 +361,30 @@ def sprawdz_paczke(paczka: Path, moduly: Dict[str, Set[str]]) -> List[str]:
     return nieznane
 
 
-def zbuduj_tekst(skladniki: List[Skladnik], kod_wydania: str) -> str:
+def zbuduj_tekst(skladniki: List[Skladnik], kod_wydania: str, firma: str = "") -> str:
     from whisper_automat.core.wydanie import WYDANIA
 
     wyd = WYDANIA.get(kod_wydania, WYDANIA["papuga"])
     dzis = dt.date.today().isoformat()
+    if wyd.kod == "firma":
+        # Wydanie firmowe nie wskazuje autora ani marki MATCODE (decyzja
+        # autora 2026-10-26) — zasady korzystania są w oknie „Licencja”.
+        # Firma przychodzi z podpisu w paczce, w kodzie jej nazwy nie ma.
+        o_programie = [
+            (f"{wyd.nazwa} to program {firma}. Kto może z niego korzystać, opisuje"
+             if firma else "Kto może korzystać z programu, opisuje"),
+            "okno „Licencja” w programie (odnośnik w prawym dolnym rogu okna).",
+        ]
+    else:
+        o_programie = [
+            f"Sam program ({wyd.nazwa}, kod w pakiecie whisper_automat) jest na licencji MIT.",
+            "Jej treść jest w pliku LICENSE.txt obok. Autor: MATCODE.",
+        ]
     linie = [
         f"{wyd.pelna_nazwa} {_wersja_programu()} — licencje składników",
         "=" * 72,
         "",
-        f"Sam program ({wyd.nazwa}, kod w pakiecie whisper_automat) jest na licencji MIT.",
-        "Jej treść jest w pliku LICENSE.txt obok. Autor: MATCODE.",
+        *o_programie,
         "",
         "Poniżej składniki, z których program korzysta i które są rozpowszechniane",
         "razem z nim, wraz z ich licencjami. Biblioteki NVIDIA (nvidia-*) są tylko",
@@ -404,12 +417,13 @@ def zbuduj_tekst(skladniki: List[Skladnik], kod_wydania: str) -> str:
     return "\n".join(linie)
 
 
-def zapisz(cel: Path, paczka: Optional[Path] = None, kod_wydania: str = "papuga") -> Path:
+def zapisz(cel: Path, paczka: Optional[Path] = None, kod_wydania: str = "papuga",
+           firma: str = "") -> Path:
     z_pip, moduly = pakiety_pythona()
     skladniki = skladniki_reczne(paczka) + z_pip
     cel = Path(cel)
     cel.parent.mkdir(parents=True, exist_ok=True)
-    cel.write_text(zbuduj_tekst(skladniki, kod_wydania), encoding="utf-8")
+    cel.write_text(zbuduj_tekst(skladniki, kod_wydania, firma), encoding="utf-8")
     bez_tekstu = [s.nazwa for s in skladniki if not s.teksty]
     print(f"  licencje: {len(skladniki)} składników -> {cel} "
           f"({cel.stat().st_size / 1024:.0f} KB)")

@@ -9,7 +9,8 @@ Dwa warianty instalatora:
 Etapy:
   1. pobranie lekkiej wersji ffmpeg (raz, potem z pamięci podręcznej)
   2. PyInstaller — katalog `dist/WhisperAutomat` z całą zawartością
-  3. spis licencji składników (tools/licencje.py) i LICENSE obok pliku .exe
+  3. spis licencji składników (tools/licencje.py) i LICENSE (tylko Papuga)
+     obok pliku .exe
   4. Inno Setup — jeden plik `dist/WhisperAutomat-<wersja>-Setup[-offline].exe`
 
 Uruchomienie:
@@ -323,12 +324,19 @@ def zbuduj_aplikacje(ffmpeg_dir: Path, z_cuda: bool,
         raise SystemExit("PyInstaller nie wyprodukował pliku .exe")
 
     # Licencja programu i spis licencji składników leżą obok pliku .exe —
-    # stopka okna otwiera je odnośnikiem „Licencje”.
+    # stopka okna otwiera je odnośnikiem „Licencje”. Wydanie firmowe nie
+    # dostaje LICENSE (MIT z marką MATCODE): nic w nim nie wskazuje autora,
+    # zasady korzystania opisuje okno „Licencja”.
     log("Licencje")
     import licencje
 
-    licencje.zapisz(wynik / "LICENCJE.txt", paczka=wynik, kod_wydania=WYD.kod)
-    shutil.copy2(ROOT / "LICENSE", wynik / "LICENSE.txt")
+    licencje.zapisz(wynik / "LICENCJE.txt", paczka=wynik, kod_wydania=WYD.kod,
+                    firma=WYD.firma)
+    licencja_mit = wynik / "LICENSE.txt"
+    if WYD.kod == "firma":
+        licencja_mit.unlink(missing_ok=True)
+    else:
+        shutil.copy2(ROOT / "LICENSE", licencja_mit)
     return wynik
 
 

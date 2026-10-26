@@ -109,7 +109,6 @@ EN = {
     "Sprawdź aktualizacje": "Check for updates",
     "Zgłoś problem": "Report a problem",
     "Kontakt": "Contact",
-    "Zgłoś błąd lub pomysł": "Report a bug or an idea",
     "Licencje": "Licenses",
     "Zaktualizuj teraz": "Update now",
     "Co nowego": "What's new",
@@ -128,18 +127,12 @@ EN = {
     "Zmień…": "Change…",
     "domyślny": "default",
     "domyślne urządzenie odtwarzania": "default playback device",
-    "Mikrofon: {mik}  ·  Dźwięk spotkania z: {system}":
-        "Microphone: {mik}  ·  Meeting audio from: {system}",
     "Nagrywam spotkanie: {plik}": "Recording meeting: {plik}",
     "Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane.":
         "Recording. Let the participants know the meeting is being recorded.",
     "Zapisuję…": "Saving…",
     "Kończę nagranie…": "Finishing the recording…",
     "Zatrzymaj nagranie": "Stop recording",
-    "Nie słychać dźwięku spotkania. Sprawdź, na jakie urządzenie gra Teams, i "
-        "wskaż je w „Zmień…”.":
-        "No meeting audio. Check which device Teams plays to and pick it under "
-        "“Change…”.",
     "UWAGA (nagrywanie): {tekst}": "NOTE (recording): {tekst}",
     "Nagranie zapisane: {plik} ({czas}).": "Recording saved: {plik} ({czas}).",
     "  {tor}: luki {luki}, korekty dryfu {korekty}, odrzucone próbki "
@@ -152,35 +145,10 @@ EN = {
         "Recording saved ({czas}). Transcription starts after the current job.",
     "Nagranie zapisane ({czas}). Zaczynam transkrypcję…":
         "Recording saved ({czas}). Starting transcription…",
-    "Źródła zmienisz po zatrzymaniu nagrania.":
-        "You can change the sources once the recording stops.",
-    "Źródła nagrania": "Recording sources",
-    "Domyślne (ustawienie Windows)": "Default (Windows setting)",
-    "Wczytuję listę urządzeń…": "Loading the device list…",
-    "Dźwięk spotkania z urządzenia (tego, na którym gra Teams)":
-        "Meeting audio from the device (the one Teams plays to)",
-    "Przy każdym urządzeniu stoi, co to jest: słuchawki, głośniki komputera, "
-        "monitor, mikrofon wbudowany. „Używa Teams” to urządzenie, na którym "
-        "Windows prowadzi rozmowy. Słuchawki na zwykłym jacku grają przez "
-        "„głośniki komputera” — Windows ich nie odróżnia.\n\n"
-        "Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
-        "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania.":
-        "Next to each device you can see what it is: headphones, computer speakers, "
-        "a monitor, the built-in microphone. “Used by Teams” is the device Windows "
-        "uses for calls. Headphones on a plain jack play through the “computer "
-        "speakers” — Windows cannot tell them apart.\n\n"
-        "Headphones work best: with speakers the microphone picks up the other "
-        "people a second time, delayed. Changes apply from the next recording.",
     "{domyslne} — teraz: {co}": "{domyslne} — now: {co}",
     "domyślne w Windows": "Windows default",
     "używa Teams": "used by Teams",
     "{nazwa} (odłączone — pójdzie domyślne)": "{nazwa} (unplugged — the default will be used)",
-    "Podłączony jest zestaw słuchawkowy:\n{zestaw}\n\n"
-        "Nagranie poszłoby z: {obecne}.\n\n"
-        "Nagrywać przez zestaw słuchawkowy? Zapamiętam go w „Zmień…”.":
-        "A headset is connected:\n{zestaw}\n\n"
-        "The recording would use: {obecne}.\n\n"
-        "Record through the headset? It will be remembered under “Change…”.",
     "Nagranie przez zestaw słuchawkowy: {zestaw}": "Recording through the headset: {zestaw}",
     # core/urzadzenia.py — co to za urządzenie
     "USB": "USB",
@@ -198,9 +166,6 @@ EN = {
     "wejście liniowe": "line in",
     "wyjście liniowe": "line out",
     "wyjście cyfrowe": "digital output",
-    "Anuluj": "Cancel",
-    "Zapisz": "Save",
-    "Nie udało się odczytać urządzeń": "Could not read the devices",
     "Poprzednie nagrywanie nie zostało poprawnie zakończone:\n\n{pliki}\n\nOdzyskać "
         "nagranie i dodać je do kolejki?":
         "The previous recording did not finish properly:\n\n{pliki}\n\nRecover the "
@@ -695,8 +660,6 @@ EN = {
         "The file {plik} in the updates folder has a wrong format.",
     "GitHub odpowiedział błędem HTTP {kod}.":
         "GitHub responded with HTTP error {kod}.",
-    "Folder z aktualizacjami jest niedostępny (poza siecią firmową?):\n{folder}":
-        "The updates folder is unavailable (outside the company network?):\n{folder}",
     "To wydanie nie ma instalatora ze sprawdzalną sumą kontrolną.":
         "This release has no installer with a verifiable checksum.",
     "Nie udało się odczytać {plik} z folderu aktualizacji.":
@@ -761,10 +724,10 @@ EN = {
         "Neither a microphone nor an audio playback device was found.",
     "Brak mikrofonu — nagrywam sam dźwięk systemowy.":
         "No microphone — recording system audio only.",
-    "Za mało miejsca na dysku ({mb:.0f} MB wolne). Godzina nagrania to około 50 "
+    "Za mało miejsca na dysku ({mb:.0f} MB wolne). Godzina nagrania to około 80 "
         "MB.":
         "Not enough disk space ({mb:.0f} MB free). An hour of recording takes about "
-        "50 MB.",
+        "80 MB.",
     "To urządzenie nie udostępnia dźwięku systemowego — nagrywam sam mikrofon.":
         "This device does not provide system audio — recording the microphone only.",
     "Komputer był uśpiony — w nagraniu zostaje sekunda przerwy.":
@@ -921,8 +884,6 @@ EN = {
     'Próbkę głosu nagrasz po zatrzymaniu nagrania.':
         'Record the voice sample after stopping the recording.',
     'Dodaj mój głos do bazy…': 'Add my voice to the database…',
-    'Dobrowolne. Pomaga wszystkim użytkownikom {app} w firmie: Twoje imię pojawi się w ich transkrypcjach samo.':
-        'Voluntary. Helps every {app} user in the company: your name will show up in their transcripts by itself.',
     'Dzień dobry, nazywam się … i pracuję w dziale … . Dziś omówimy plan na najbliższy kwartał: terminy dostaw, nowy cennik oraz przygotowania do targów. Proszę o uwagi do protokołu z ostatniego spotkania. Jeśli coś jest niejasne, pytajcie śmiało, chętnie wyjaśnię. Na koniec ustalimy, kto odpowiada za kolejne kroki i do kiedy.':
         'Good morning, my name is … and I work in the … department. Today we will go through the plan for the coming quarter: delivery dates, the new price list and preparations for the trade fair. Please send me your comments on the minutes from the last meeting. If anything is unclear, just ask, I will gladly explain. At the end we will agree who is responsible for the next steps and by when.',
     'Dodaj mój głos do bazy': 'Add my voice to the database',
@@ -959,8 +920,6 @@ EN = {
     'Nagranie próbki przerwane.': 'Sample recording interrupted.',
     'Udział jest dobrowolny i można go w każdej chwili cofnąć przyciskiem „Usuń mój głos”. Pomaga wszystkim użytkownikom {app} w firmie: gdy weźmiesz udział w nagrywanym spotkaniu, Twoje imię pojawi się w ich transkrypcji samo, zamiast „MÓWCA 2”.\n\nDo bazy trafia odcisk głosu (zestaw liczb opisujących brzmienie, nie nagranie), Twoje imię, login i data. Baza leży w folderze firmowym obok instalatora i korzysta z niej tylko ten program. Głosów innych osób program nigdy nie zapisuje sam.':
         "Taking part is voluntary and can be withdrawn at any time with “Remove my voice”. It helps every {app} user in the company: when you take part in a recorded meeting, your name shows up in their transcript by itself instead of “SPEAKER 2”.\n\nThe database stores a voiceprint (a set of numbers describing the sound, not a recording), your name, login and date. It lives in the company folder next to the installer and only this program uses it. The program never stores other people's voices on its own.",
-    'Nie słychać Cię — sprawdź mikrofon w „Zmień…” pod przyciskiem nagrywania.':
-        "Can't hear you — check the microphone in “Change…” under the record button.",
     'z bazy głosów · {p:.0%}': 'from the voice database · {p:.0%}',
     'To wydanie nie ma bazy głosów.':
         'This edition has no voice database.',
@@ -990,4 +949,177 @@ EN = {
     '[{i}/{n}] Porównuję głosy z bazą…':
         '[{i}/{n}] Comparing voices with the database…',
     'Baza głosów: {blad}': 'Voice database: {blad}',
+    # -- 1.6: obraz spotkania i próbka mikrofonu ------------------------------
+    "Kończę zapisywanie obrazu spotkania…": "Finishing saving the meeting video…",
+    "Poczekaj, aż skończy się próbka mikrofonu.":
+        "Wait until the microphone sample has finished.",
+    "Okno programu {program} nie jest otwarte, więc obrazu nie ma skąd wziąć.\n\n"
+    "Nagrywać sam dźwięk?\n„Nie” — otwórz spotkanie i kliknij „Nagrywaj spotkanie” "
+    "jeszcze raz.":
+        "The {program} window is not open, so there is no video to take.\n\n"
+        "Record audio only?\n“No” — open the meeting and click “Record meeting” again.",
+    "Prawie cisza ({db:.0f} dB) z: {urzadzenie}. Sprawdź, czy mikrofon nie jest wyciszony "
+    "i czy to właściwe urządzenie.":
+        "Almost silence ({db:.0f} dB) from: {urzadzenie}. Check that the microphone is not "
+        "muted and that it is the right device.",
+    "Obraz spotkania zapisany: {plik}": "Meeting video saved: {plik}",
+    "Bardzo głośno ({db:.0f} dB) z: {urzadzenie} — mogą być przestery. Odsuń mikrofon "
+    "albo zmniejsz czułość w ustawieniach Windows.":
+        "Very loud ({db:.0f} dB) from: {urzadzenie} — it may distort. Move the microphone "
+        "away or lower its sensitivity in Windows settings.",
+    "Nagrywanie obrazu wymaga ffmpeg 9 lub nowszego — jest w instalatorze programu.":
+        "Recording video needs ffmpeg 9 or newer — it comes with the program installer.",
+    "{program} — teraz zamknięty; okno wezmę przy starcie nagrania":
+        "{program} — closed now; I will take its window when recording starts",
+    "Nagrywam też obraz: {zrodlo}": "Also recording video: {zrodlo}",
+    "Cały ekran ({rozmiar})": "Whole screen ({rozmiar})",
+    "Cały ekran — główny monitor ({rozmiar})": "Whole screen — main monitor ({rozmiar})",
+    "Cały ekran — monitor {n} ({rozmiar})": "Whole screen — monitor {n} ({rozmiar})",
+    "Cały ekran — {nazwa} ({rozmiar})": "Whole screen — {nazwa} ({rozmiar})",
+    "Ekranu już nie ma (odłączony monitor) — nagrywam sam dźwięk.":
+        "The screen is gone (monitor disconnected) — recording audio only.",
+    "⇄ Cały ekran": "⇄ Whole screen",
+    "⇄ Okno": "⇄ Window",
+    "Nie widzę okna spotkania — obraz zostaje z całego ekranu.":
+        "I cannot see the meeting window — the video stays on the whole screen.",
+    "Przełączam obraz…": "Switching the video…",
+    "Obraz przełączony na: {zrodlo}": "Video switched to: {zrodlo}",
+    "Przełącz na cały ekran": "Switch to the whole screen",
+    "Nie teraz": "Not now",
+    "Okno spotkania się schowało — pytam, czy nagrywać cały ekran.":
+        "The meeting window was hidden — asking whether to record the whole screen.",
+    "Okno spotkania się schowało": "The meeting window was hidden",
+    "Udostępniasz ekran? Żeby było go widać w nagraniu, przełącz obraz na cały ekran. "
+    "Nagra się wszystko, co na nim widać — także powiadomienia.":
+        "Sharing your screen? To have it in the recording, switch the video to the whole "
+        "screen. Everything visible on it gets recorded — notifications too.",
+    "Okno spotkania wróciło — pytam, czy wrócić do nagrywania okna.":
+        "The meeting window is back — asking whether to go back to recording the window.",
+    "Okno spotkania wróciło": "The meeting window is back",
+    "Udostępnianie skończone? Przełącz obraz z powrotem na okno spotkania — cały ekran "
+    "nagrywa też wszystko inne, co na nim robisz.":
+        "Done sharing? Switch the video back to the meeting window — the whole screen also "
+        "records everything else you do on it.",
+    "Wróć do okna spotkania": "Back to the meeting window",
+    "Zostaw cały ekran": "Keep the whole screen",
+    "Ten ffmpeg nie umie nagrywać okien — nagrywam sam dźwięk.":
+        "This ffmpeg cannot record windows — recording audio only.",
+    "Nie udało się złożyć obrazu spotkania: {blad}. Odcinki obrazu (.ts) zostały "
+    "w folderze Nagrania — każdy da się obejrzeć osobno.":
+        "Could not assemble the meeting video: {blad}. The video parts (.ts) stay in the "
+        "Recordings folder — each can be watched on its own.",
+    "Nie udało się nagrać próbki: {blad}": "Could not record the sample: {blad}",
+    "Nie znaleziono żadnego mikrofonu.": "No microphone found.",
+    "zminimalizowane": "minimised",
+    "Okna spotkania już nie ma — nagrywam sam dźwięk.":
+        "The meeting window is gone — recording audio only.",
+    "Okno spotkania zamknięte — obraz zatrzymany, dźwięk nagrywa dalej.":
+        "Meeting window closed — video stopped, audio keeps recording.",
+    "Obraz spotkania nie ruszył: {blad}": "Meeting video did not start: {blad}",
+    "ffmpeg zakończył pracę": "ffmpeg exited",
+    "Obraz spotkania przerwany: {blad}": "Meeting video interrupted: {blad}",
+    # -- 1.6.1: fragmenty („Zaznacz” — początek i koniec), pole obrazu na karcie --
+    "Fragment {n}": "Section {n}",
+    "Fragment {n} — koniec": "Section {n} — end",
+    "Fragment {n} — początek": "Section {n} — start",
+    "Fragment {n}: początek {czas}": "Section {n}: start {czas}",
+    "Fragment {n}: {od}–{do}": "Section {n}: {od}–{do}",
+    "Fragment {n}: {od}–{do} — w transkrypcji będzie oznaczony ⚑.":
+        "Section {n}: {od}–{do} — it will be marked ⚑ in the transcript.",
+    "Nie widzę okna spotkania (Zoom, Teams, Meet…).\n\nTak — nagrywaj cały ekran\n"
+    "Nie — nagrywaj sam dźwięk\nAnuluj — nie zaczynaj: otwórz spotkanie i kliknij "
+    "„Nagrywaj spotkanie” jeszcze raz":
+        "I cannot see a meeting window (Zoom, Teams, Meet…).\n\nYes — record the whole "
+        "screen\nNo — record audio only\nCancel — do not start: open the meeting and click "
+        "“Record meeting” again",
+    "Zaznaczasz fragment {n} od {czas} — naciśnij „Zakończ” (F8), gdy się skończy.":
+        "Marking section {n} from {czas} — press “End” (F8) when it is over.",
+    "Zaznaczony moment": "Marked moment",
+    "koniec fragmentu {n}": "end of section {n}",
+    "⚑ Zakończ (F8)": "⚑ End (F8)",
+    # 1.6.2: źródła na karcie nagrywania (bez okna „Zmień…”), stopka
+    # z adresatem zgłoszeń, okno „Licencja” wydania firmowego.
+    "Obraz": "Video",
+    "Sprawdź": "Test",
+    "● Mów…": "● Speak…",
+    "Domyślny w Windows": "Windows default",
+    "Domyślne w Windows": "Windows default",
+    "Sam dźwięk — bez obrazu": "Audio only — no video",
+    "Okno spotkania — samo znajdzie Zoom, Teams, Meet…":
+        "Meeting window — finds Zoom, Teams, Meet… by itself",
+    "Nagra się wszystko, co widać na ekranie — także powiadomienia. Obraz trafi do "
+    "pliku MKV obok nagrania.":
+        "Everything on the screen will be recorded — notifications too. The video goes "
+        "to an MKV file next to the recording.",
+    "Przy starcie nagrania program sam znajdzie okno spotkania. Obraz trafi do pliku "
+    "MKV obok nagrania.":
+        "When recording starts, the program finds the meeting window by itself. The video "
+        "goes to an MKV file next to the recording.",
+    "Okno nagrywa się także zasłonięte innymi oknami. Obraz trafi do pliku MKV obok "
+    "nagrania.":
+        "The window is recorded even when other windows cover it. The video goes to an "
+        "MKV file next to the recording.",
+    "Mów normalnie przez 5 sekund — potem usłyszysz, jak Cię słychać.":
+        "Speak normally for 5 seconds — then you will hear how you sound.",
+    "Nagrano z: {urzadzenie}. Poziom {db:.0f} dB — w porządku. Odtwarzam próbkę.":
+        "Recorded from: {urzadzenie}. Level {db:.0f} dB — fine. Playing the sample.",
+    "Próbka mikrofonu: {tekst}": "Microphone sample: {tekst}",
+    "Nie słychać dźwięku spotkania. Sprawdź, na jakie urządzenie gra Teams, i po "
+    "nagraniu wybierz je w polu „Dźwięk spotkania”.":
+        "No meeting audio. Check which device Teams plays on and, after the recording, "
+        "choose it in the “Meeting audio” field.",
+    "Podłączony jest zestaw słuchawkowy:\n{zestaw}\n\nNagranie poszłoby z: {obecne}.\n\n"
+    "Nagrywać przez zestaw słuchawkowy? Zapamiętam go na karcie nagrywania.":
+        "A headset is connected:\n{zestaw}\n\nThe recording would use: {obecne}.\n\n"
+        "Record through the headset? I will remember it on the recording card.",
+    "Nie słychać Cię — sprawdź, który mikrofon jest wybrany na karcie nagrywania.":
+        "I cannot hear you — check which microphone is selected on the recording card.",
+    "Za mało miejsca na dysku na nagranie z obrazem ({mb:.0f} MB wolne, potrzeba co "
+    "najmniej 3 GB). Zwolnij miejsce albo w polu „Obraz” wybierz „Sam dźwięk — bez "
+    "obrazu”.":
+        "Not enough disk space to record video ({mb:.0f} MB free, at least 3 GB needed). "
+        "Free up space or choose “Audio only — no video” in the “Video” field.",
+    "Na karcie nagrywania wybierasz mikrofon, urządzenie, na którym słychać spotkanie, "
+    "i obraz: sam dźwięk, okno spotkania albo cały ekran (do pliku MKV). „Sprawdź” "
+    "nagra 5 sekund z mikrofonu i od razu je odtworzy. Słuchawki na zwykłym jacku grają "
+    "przez „głośniki komputera” — Windows ich nie odróżnia.":
+        "On the recording card you choose the microphone, the device the meeting plays "
+        "on, and the video: audio only, the meeting window or the whole screen (to an MKV "
+        "file). “Test” records 5 seconds from the microphone and plays them back. "
+        "Headphones on a regular jack play through the “computer speakers” — Windows "
+        "cannot tell them apart.",
+    "Ten komputer nie widzi folderu z aktualizacjami — pewnie jest poza siecią firmy. "
+    "Program działa normalnie, a nowa wersja przyjdzie sama, gdy komputer wróci do sieci "
+    "firmowej.\n\n{folder}":
+        "This computer cannot see the updates folder — it is probably outside the company "
+        "network. The program works normally, and the new version will arrive by itself "
+        "once the computer is back on the company network.\n\n{folder}",
+    "Zgłoś błąd lub pomysł:": "Report a bug or idea:",
+    "{app} {w}: problem lub sugestia": "{app} {w}: problem or suggestion",
+    "Nie udało się otworzyć programu pocztowego. Napisz na adres {adres} — jest już "
+    "w schowku, wystarczy wkleić.":
+        "Could not open the email program. Write to {adres} — the address is already "
+        "on the clipboard, just paste it.",
+    "Licencja": "License",
+    "Licencja — {app}": "License — {app}",
+    "{app}, wersja {w}": "{app}, version {w}",
+    "{app} to program {firma}. Mogą z niego korzystać wszyscy pracownicy firmy.":
+        "{app} is {firma} software. All {firma} employees may use it.",
+    "Wolno go udostępniać i przekazywać dalej.": "It may be shared and passed on.",
+    "Aktualizacje przychodzą same z folderu firmowego, gdy komputer jest w sieci "
+    "firmy. Na komputerze poza firmą program działa normalnie, ale nie dostaje "
+    "automatycznych aktualizacji.":
+        "Updates arrive by themselves from the company folder while the computer is on "
+        "the company network. On a computer outside the company the program works "
+        "normally but gets no automatic updates.",
+    "Nagrania i transkrypcje zostają na komputerze — program działa bez internetu.":
+        "Recordings and transcripts stay on the computer — the program works offline.",
+    "Błędy i pomysły": "Bugs and ideas",
+    "Opiekun programu:": "Maintainer:",
+    "Składniki open source": "Open-source components",
+    "Program korzysta z bibliotek open source (m.in. faster-whisper i FFmpeg) na ich "
+    "własnych licencjach.":
+        "The program uses open-source libraries (including faster-whisper and FFmpeg) "
+        "under their own licenses.",
+    "Licencje składników": "Component licenses",
 }

@@ -163,6 +163,12 @@ Filename: "{app}\{#AppExe}"; \
 Filename: "{app}\{#AppExe}"; \
     Flags: nowait runasoriginaluser; Check: PoAktualizacji
 
+[InstallDelete]
+; Do 1.6.2 wydanie firmowe dostawało LICENSE.txt (MIT z marką MATCODE),
+; a aktualizacja nie zdejmuje plików, których nowa paczka nie ma. Papuga
+; dostaje go z powrotem z [Files] — usuwanie idzie przed kopiowaniem.
+Type: files; Name: "{app}\LICENSE.txt"
+
 [UninstallDelete]
 ; Katalog roboczy w profilu użytkownika (modele, ustawienia, pliki tymczasowe)
 ; nie jest usuwany automatycznie — pobrany model waży 1,6 GB i przy ponownej

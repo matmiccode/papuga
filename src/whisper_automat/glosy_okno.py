@@ -3,7 +3,7 @@
 Jedno okno robi wszystko: mówi, po co baza i że udział jest dobrowolny,
 pokazuje stan (ile głosów, czy mój jest), nagrywa próbkę z mikrofonu
 (ten sam tor, co nagrywanie spotkań — więc działa zestaw słuchawkowy
-wybrany w „Zmień…”), liczy odcisk i zapisuje go do folderu firmowego.
+wybrany na karcie nagrywania), liczy odcisk i zapisuje go do folderu firmowego.
 Przycisk „Usuń mój głos” cofa udział.
 
 Nagranie próbki idzie przez `nagrywanie.Nagrywarka` do katalogu
@@ -276,8 +276,8 @@ class OknoGlosu:
                     if zd[1] > -40.0:
                         self._cicho = False
                     elif self._cicho and zd[1] <= -60.0 and self.pasek["value"] > 50:
-                        self._powiedz(t("Nie słychać Cię — sprawdź mikrofon w „Zmień…” pod "
-                                        "przyciskiem nagrywania."), blad=True)
+                        self._powiedz(t("Nie słychać Cię — sprawdź, który mikrofon jest "
+                                        "wybrany na karcie nagrywania."), blad=True)
                 elif rodzaj == "blad":
                     self._sprzatnij()
                     self.nagraj_btn.configure(state="normal",

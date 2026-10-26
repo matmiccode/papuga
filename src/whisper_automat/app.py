@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import tkinter as tk
@@ -16,7 +18,7 @@ from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
 
 from . import __version__, teksty
-from .core import doctor, download, glosy, media, nagrywanie, probe, update, urzadzenia
+from .core import doctor, download, glosy, media, nagrywanie, probe, update, urzadzenia, wideo
 from .core.config import (
     APP_ID, APP_NAME, LANGUAGES, WYDANIE, Settings, asset, default_output_dir,
     imie_uzytkownika, is_frozen, models_dir, project_root,
@@ -32,19 +34,23 @@ APP_TITLE = APP_NAME
 
 from . import theme
 from .theme import (
-    ACCENT, ACCENT_HOVER, ACCENT_SOFT, BANER_BG, BANER_OK_BG, BG, BG_CARD, BG_DROP, BG_INPUT,
+    ACCENT, ACCENT_HOVER, ACCENT_SOFT, BANER_BG, BANER_OK_BG, BANER_WARN_BG, BG, BG_CARD,
+    BG_DROP, BG_INPUT,
     BG_DROP_HOVER,
     BORDER_DROP, ERR_COLOR, FG, FG_DIM, FG_FAINT, LOG_BG, LOG_FG, OK_COLOR, WARN_COLOR,
 )
 
 #: Znak w kolumnie kolejki, którym usuwa się plik.
 USUN = "✕"
+#: Wybór na liście „Obraz”: okno spotkania, które program znajdzie sam
+#: przy starcie nagrania (w ustawieniach: obraz bez programu i ekranu).
+OBRAZ_AUTO = "auto"
 
-#: Wiersze lewej kolumny okna: baner nowej wersji, pasek „transkrypcja
-#: zakończona”, karta nagrywania (tylko wydania z nagrywaniem), pole
-#: upuszczania, kolejka, dziennik. Panel ustawień po prawej rozciąga się
-#: na wszystkie.
-W_BANER, W_WYNIK, W_NAGRYWANIE, W_DROP, W_KOLEJKA, W_DZIENNIK = 0, 1, 2, 3, 4, 5
+#: Wiersze lewej kolumny okna: baner nowej wersji, karta nagrywania (tylko
+#: wydania z nagrywaniem), pole upuszczania, kolejka, dziennik. Panel
+#: ustawień po prawej rozciąga się na wszystkie. Komunikat „transkrypcja
+#: zakończona” nie ma wiersza — leży nakładką na kolejce (_build_queue).
+W_BANER, W_NAGRYWANIE, W_DROP, W_KOLEJKA, W_DZIENNIK = 0, 1, 2, 3, 4
 
 
 def _hms(sekundy: float) -> str:
@@ -65,6 +71,31 @@ def _skroc_srodek(tekst: str, limit: int = 50) -> str:
         return tekst
     przod = max(8, limit * 2 // 5)
     return tekst[:przod] + "…" + tekst[-(limit - przod - 1):]
+
+
+def _model_urzadzenia(nazwa: str) -> str:
+    """„Głośniki (3 — Realtek(R) Audio)” → „Realtek(R) Audio”.
+
+    W nazwie Windows po rodzaju urządzenia stoi w nawiasie sterownik albo
+    model; numer przed myślnikiem Windows dokleja, gdy nazwy się powtarzają.
+    """
+    _rodzaj, nawias, reszta = nazwa.partition(" (")
+    if not nawias or not reszta.endswith(")"):
+        return nazwa
+    return re.sub(r"^\d+\s*[—–-]\s*", "", reszta[:-1]) or nazwa
+
+
+def _wpis_urzadzenia(p: urzadzenia.PunktAudio) -> str:
+    """Wpis na liście urządzeń: „Zestaw słuchawkowy USB · Poly Blackwire 3320
+    Series  · używa Teams” — najpierw co to jest (laik czyta początek), potem
+    model z nazwy Windows."""
+    opis = urzadzenia.opis_rodzaju(p)
+    wpis = f"{opis[:1].upper()}{opis[1:]} · {_model_urzadzenia(p.nazwa)}" if opis else p.nazwa
+    if p.domyslne:
+        wpis += "  · " + t("domyślne w Windows")
+    if p.komunikacyjne:
+        wpis += "  · " + t("używa Teams")
+    return wpis
 
 
 def _tytul_okna() -> str:
@@ -190,6 +221,9 @@ class App:
             # Nagranie urwane awarią wraca do kolejki — pytanie dopiero,
             # gdy okno już stoi, nie zza ekranu powitalnego.
             self.root.after(1500, self._odzyskaj_nagrania)
+            # Zawsze: lista „Obraz” musi wiedzieć, czy ffmpeg umie nagrywać
+            # okna; koder próbujemy tylko wtedy, gdy obraz jest włączony.
+            self._rozgrzej_obraz(koder=self.settings.nagranie_obraz)
 
         self._aktualizacja = None
         self._sprawdzam = False
@@ -333,6 +367,16 @@ class App:
         c.bind("<Button-1>", lambda _e: self._zmien_jezyk())
         return c
 
+    def _poczekaj_na_obraz(self) -> None:
+        """Przed zamknięciem: obraz spotkania składa się jeszcze w tle (~20 s
+        na godzinę). Czego nie zdąży, dokończy następny start programu."""
+        nagrywarka = getattr(self, "nagrywarka", None)
+        if nagrywarka is None or not nagrywarka.sklada_obraz:
+            return
+        self.status_var.set(t("Kończę zapisywanie obrazu spotkania…"))
+        self.root.update_idletasks()
+        nagrywarka.czekaj_na_obraz(90)
+
     def _zmien_jezyk(self) -> None:
         """Przełącznik PL/EN: zapis w ustawieniach i ponowne uruchomienie."""
         if self._nagrywa() or self._busy():
@@ -346,6 +390,7 @@ class App:
                 self.nagrywarka.czekaj(15)
             if self._busy():
                 self.cancel_flag.set()
+        self._poczekaj_na_obraz()
         self.settings.jezyk = teksty.drugi_jezyk()
         self.settings.save()
         # Nowy proces ma wziąć język z ustawień, nie ze zmiennej testowej.
@@ -414,23 +459,12 @@ class App:
         return etykieta
 
     def _build_links(self, stopka) -> None:
-        """Podpis autora, diagnostyka, aktualizacje, zgłoszenia, kontakt.
+        """Zgłoszenia, diagnostyka, aktualizacje, kontakt, licencja.
 
         Wszystko poza diagnostyką i licencjami tylko wtedy, gdy wydanie to ma.
         """
-        from urllib.parse import quote
-
         linki = []
-        kontakt = None
-        if WYDANIE.kontakt_email:
-            temat = quote(f"{APP_TITLE} {__version__}")
-            kontakt = lambda: webbrowser.open(  # noqa: E731
-                f"mailto:{WYDANIE.kontakt_email}?subject={temat}")
-        if kontakt and not WYDANIE.zgloszenia_url:
-            # Wydanie bez repozytorium (firmowe): zgłoszenia idą mailem do
-            # autora, więc odnośnik stoi tuż przy jego podpisie i mówi
-            # wprost, po co jest.
-            linki.append((t("Zgłoś błąd lub pomysł"), kontakt))
+        kontakt = self._napisz_do_autora if WYDANIE.kontakt_email else None
         linki.append((t("Diagnostyka"), self.show_diagnosis))
         if WYDANIE.aktualizacje:
             linki.append((t("Sprawdź aktualizacje"), self.sprawdz_aktualizacje))
@@ -438,19 +472,41 @@ class App:
             linki.append((t("Zgłoś problem"), lambda: webbrowser.open(WYDANIE.zgloszenia_url)))
             if kontakt:
                 linki.append((t("Kontakt"), kontakt))
-        linki.append((t("Licencje"), self.pokaz_licencje))
-        if not linki:
-            return
+        linki.append((t("Licencja") if WYDANIE.firma else t("Licencje"), self.pokaz_licencje))
 
         rzad = tk.Frame(stopka, bg=BG)
         rzad.grid(row=0, column=2, sticky="e")
-        if WYDANIE.autor:
-            # Cicho, tym samym szarym co numer wersji w nagłówku — podpis,
-            # nie reklama.
-            ttk.Label(rzad, text=WYDANIE.autor, style="Dim.TLabel").pack(
+        if kontakt and not WYDANIE.zgloszenia_url:
+            # Wydanie bez repozytorium (firmowe): zgłoszenia idą mailem do
+            # autora. Do 1.6.1 stał tu sam podpis „imię nazwisko – firma”
+            # i ludzie czytali go jak zastrzeżenie praw do programu; teraz
+            # nazwisko mówi, do kogo pisać, a klik otwiera wiadomość.
+            ttk.Label(rzad, text=t("Zgłoś błąd lub pomysł:"), style="Dim.TLabel").pack(
+                side="left", padx=(0, 6))
+            self._link(rzad, "✉ " + (WYDANIE.osoba or WYDANIE.kontakt_email), kontakt).pack(
                 side="left", padx=(0, 24))
         for i, (tekst, akcja) in enumerate(linki):
             self._link(rzad, tekst, akcja).pack(side="left", padx=(18 if i else 0, 0))
+
+    def _napisz_do_autora(self) -> None:
+        """Nowa wiadomość do autora w programie pocztowym: adres i temat
+        z wersją, treść pisze użytkownik.
+
+        Temat bez polskich znaków: klasyczny Outlook czyta adres mailto
+        w stronie kodowej Windows, nie w UTF-8, i „błąd” wyszedłby
+        krzaczkami. Bez programu pocztowego — adres trafia do schowka.
+        """
+        from urllib.parse import quote
+
+        adres = WYDANIE.kontakt_email
+        temat = quote(t("{app} {w}: problem lub sugestia").format(app=APP_TITLE, w=__version__))
+        if webbrowser.open(f"mailto:{adres}?subject={temat}"):
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(adres)
+        messagebox.showinfo(APP_TITLE, t(
+            "Nie udało się otworzyć programu pocztowego. Napisz na adres {adres} — "
+            "jest już w schowku, wystarczy wkleić.").format(adres=adres), parent=self.root)
 
     def _build_banner(self, parent) -> None:
         """Pasek „Dostępna nowa wersja” — ukryty, dopóki jej nie ma."""
@@ -477,35 +533,71 @@ class App:
                 row=0, column=i, padx=(8 if i else 0, 0))
         self.baner.grid_remove()
 
-        # Pasek „Transkrypcja zakończona” — jedna linijka statusu na dole
-        # ginęła; koniec pracy ma być widoczny z drugiego końca pokoju,
-        # a gdy okno jest w tle, ma mignąć na pasku zadań.
-        self.baner_wynik = tk.Frame(parent, bg=BANER_OK_BG, padx=14, pady=10,
+    # -- nakładka „Transkrypcja zakończona” -------------------------------
+
+    #: Szerokość nakładki: taka część kolejki, nie więcej niż tyle pikseli.
+    WYNIK_UDZIAL, WYNIK_MAX = 0.82, 640
+
+    def _build_result(self, wrap) -> None:
+        """Komunikat o końcu pracy leży na środku kolejki — tam się patrzy
+        i czeka, aż się skończy. Pasek nad kolejką (do 1.5.0) ginął u góry
+        okna, a w węższym oknie ucinał tekst przed przyciskami. Gdy okno
+        jest w tle, dodatkowo miga na pasku zadań (_zwroc_uwage).
+        """
+        self.baner_wynik = tk.Frame(wrap, bg=BANER_OK_BG, padx=22, pady=18,
                                     highlightthickness=1, highlightbackground=OK_COLOR)
-        self.baner_wynik.grid(row=W_WYNIK, column=0, sticky="ew", pady=(0, 12), padx=(0, 14))
         self.baner_wynik.columnconfigure(1, weight=1)
         self.baner_wynik_znak = tk.Label(self.baner_wynik, text="✓", bg=BANER_OK_BG,
-                                         fg=OK_COLOR, font=(theme.FONT_SEMI, 14))
-        self.baner_wynik_znak.grid(row=0, column=0, padx=(0, 10))
+                                         fg=OK_COLOR, font=(theme.FONT_SEMI, 22))
+        self.baner_wynik_znak.grid(row=0, column=0, rowspan=2, sticky="n", padx=(0, 16))
         self.baner_wynik_tekst = tk.Label(self.baner_wynik, text="", bg=BANER_OK_BG, fg=FG,
-                                          font=(theme.FONT_SEMI, 10), anchor="w")
-        self.baner_wynik_tekst.grid(row=0, column=1, sticky="w")
-        ttk.Button(self.baner_wynik, text=t("Otwórz wyniki"), style="Accent.TButton",
-                   command=self.open_output).grid(row=0, column=2, padx=(12, 0))
-        ttk.Button(self.baner_wynik, text=t("OK"),
-                   command=self.baner_wynik.grid_remove).grid(row=0, column=3, padx=(8, 0))
-        self.baner_wynik.grid_remove()
+                                          font=(theme.FONT_SEMI, 11), anchor="w", justify="left")
+        self.baner_wynik_tekst.grid(row=0, column=1, sticky="ew")
+        self.baner_wynik_przyciski = tk.Frame(self.baner_wynik, bg=BANER_OK_BG)
+        self.baner_wynik_przyciski.grid(row=1, column=1, sticky="w", pady=(14, 0))
+        ttk.Button(self.baner_wynik_przyciski, text=t("Otwórz wyniki"), style="Accent.TButton",
+                   command=self.open_output).grid(row=0, column=0)
+        ttk.Button(self.baner_wynik_przyciski, text=t("OK"),
+                   command=self._schowaj_wynik).grid(row=0, column=1, padx=(8, 0))
+        # Szerokość idzie za kolejką, tekst łamie się do szerokości nakładki —
+        # nic nie jest ucięte, w żadnym rozmiarze okna.
+        self._wynik_lamanie = 0
+        self.tree.bind("<Configure>", self._ustaw_wynik, add="+")
+        self.baner_wynik.bind("<Configure>", self._lam_wynik)
 
     def _pokaz_wynik(self, tekst: str, ok: bool) -> None:
-        kolor = OK_COLOR if ok else WARN_COLOR
-        self.baner_wynik.configure(highlightbackground=kolor)
-        self.baner_wynik_znak.configure(text="✓" if ok else "!", fg=kolor)
-        self.baner_wynik_tekst.configure(text=tekst)
-        self.baner_wynik.grid()
+        kolor, tlo = (OK_COLOR, BANER_OK_BG) if ok else (WARN_COLOR, BANER_WARN_BG)
+        self.baner_wynik.configure(bg=tlo, highlightbackground=kolor)
+        self.baner_wynik_znak.configure(text="✓" if ok else "!", fg=kolor, bg=tlo)
+        self.baner_wynik_tekst.configure(text=tekst, bg=tlo)
+        self.baner_wynik_przyciski.configure(bg=tlo)
+        self.baner_wynik.place(in_=self.tree, relx=0.5, rely=0.5, anchor="center")
+        self.baner_wynik.lift()
+        self._ustaw_wynik()
         self._zwroc_uwage()
 
-    def _zwroc_uwage(self) -> None:
-        """Okno w tle: mignięcie na pasku zadań i dźwięk; na wierzchu — nic."""
+    def _schowaj_wynik(self) -> None:
+        self.baner_wynik.place_forget()
+
+    def _ustaw_wynik(self, _zdarzenie=None) -> None:
+        """Szerokość nakładki po zmianie rozmiaru kolejki (tylko gdy widoczna)."""
+        if self.baner_wynik.winfo_manager() != "place":
+            return
+        szer = min(int(self.tree.winfo_width() * self.WYNIK_UDZIAL), self.WYNIK_MAX)
+        self.baner_wynik.place_configure(width=max(szer, 320))
+
+    def _lam_wynik(self, zdarzenie) -> None:
+        """Łamanie tekstu do miejsca obok znaku — przy tej samej szerokości nic nie robi."""
+        szer = zdarzenie.width - 2 * 22 - 2 - self.baner_wynik_znak.winfo_reqwidth() - 16
+        if szer > 80 and szer != self._wynik_lamanie:
+            self._wynik_lamanie = szer
+            self.baner_wynik_tekst.configure(wraplength=szer)
+
+    def _zwroc_uwage(self, dzwiek: bool = True) -> None:
+        """Okno w tle: mignięcie na pasku zadań i dźwięk; na wierzchu — nic.
+
+        Bez dźwięku w trakcie spotkania (dymek o udostępnianiu ekranu).
+        """
         if os.name != "nt":
             return
         try:
@@ -524,7 +616,8 @@ class App:
             # FLASHW_ALL | FLASHW_TIMERNOFG: miga, aż okno wróci na wierzch.
             info = FLASHWINFO(ctypes.sizeof(FLASHWINFO), hwnd, 0x3 | 0xC, 0, 0)
             ctypes.windll.user32.FlashWindowEx(ctypes.byref(info))
-            self.root.bell()
+            if dzwiek:
+                self.root.bell()
         except Exception:
             pass
 
@@ -607,11 +700,14 @@ class App:
     # -- nagrywanie spotkań ------------------------------------------------
 
     def _build_recorder(self, parent) -> None:
-        """Karta nagrywania: przycisk, licznik, dwa wskaźniki poziomu, źródła.
+        """Karta nagrywania: przycisk i licznik, pod nimi trzy źródła.
 
-        Jeden klik rusza z zapamiętanymi (albo domyślnymi) urządzeniami.
-        Wskaźniki są po to, żeby od razu było widać, że oba źródła żyją —
-        najczęstszy błąd to Teams grający na inne urządzenie niż nagrywane.
+        Każde źródło ma podpis i listę, na której widać, co jest wybrane;
+        wybór zapisuje się od razu. Do 1.6.1 źródła stały szarą linią
+        z odnośnikiem „Zmień…” do osobnego okna — użytkownicy nie wiedzieli,
+        co on zmienia, i nie wyglądał jak przycisk. Wskaźnik poziomu stoi pod
+        swoim urządzeniem: najczęstszy błąd to Teams grający na inne
+        urządzenie niż nagrywane, a wtedy widać, który pasek stoi.
         """
         self.nagrywarka = nagrywanie.Nagrywarka()
         self._nagranie_plik: Optional[Path] = None
@@ -619,7 +715,6 @@ class App:
         self._nagranie_sys_cicho_od: Optional[float] = None
         self._nagranie_podpowiedziano = False
         self._po_pracy_transkrybuj = False
-        self._okno_urzadzen = None
         #: Co Windows wie o urządzeniach (typ, złącze, domyślne) — odświeżane
         #: w tle, gdy nic się nie nagrywa (core/urzadzenia.py).
         self._punkty: List[urzadzenia.PunktAudio] = []
@@ -627,43 +722,51 @@ class App:
         #: Zestaw słuchawkowy, którego użytkownik nie chciał w tej sesji —
         #: nie pytamy o niego drugi raz.
         self._zestaw_odrzucony = ""
+        #: W trakcie nagrania: skąd idzie obraz teraz (okno albo ekran, None —
+        #: sam dźwięk), okno spotkania do powrotu z całego ekranu, ostatni
+        #: zgłoszony stan tego okna i otwarty dymek z pytaniem.
+        self._obraz_teraz = None
+        self._okno_nagrania = None
+        self._okno_schowane: Optional[bool] = None
+        self._dymek = None
+        #: Czy ffmpeg umie nagrywać okna — None, dopóki sprawdzanie w tle
+        #: (_rozgrzej_obraz, kilka sekund przy pierwszym razie) nie skończy.
+        self._obraz_dostepny: Optional[bool] = None
+        #: Próbka mikrofonu („Sprawdź”): plik WAV, przerwanie, wątek.
+        self._probka = {"plik": None, "przerwij": None, "watek": None}
+        #: Wpis na liście → wybór. Urządzenia: nazwa ("" = domyślne
+        #: w Windows). Obraz: None (sam dźwięk), OBRAZ_AUTO, Ekran, Okno albo
+        #: (program, tytuł) okna zapamiętanego, a teraz zamkniętego.
+        self._mapy_zrodel = {"mikrofon": {}, "glosniki": {}, "obraz": {}}
+        self._czcionka_listy = tkfont.Font(family=theme.FONT, size=10)
 
         karta = theme.karta(parent, row=W_NAGRYWANIE, column=0, sticky="ew",
                             pady=(0, 12), padx=(0, 14))
         karta.columnconfigure(0, weight=1)
-        wnetrze = ttk.Frame(karta, style="Card.TFrame", padding=(16, 12, 16, 10))
+        wnetrze = ttk.Frame(karta, style="Card.TFrame", padding=(16, 12, 16, 12))
         wnetrze.grid(row=0, column=0, sticky="ew")
-        wnetrze.columnconfigure(3, weight=1)
+        wnetrze.columnconfigure(1, weight=1)
 
-        self.rec_btn = ttk.Button(wnetrze, text=t("Nagrywaj spotkanie"),
+        # Pierwszy wiersz: nagrywanie, licznik z kropką, która miga w trakcie,
+        # i to, co działa w trakcie: pauza (przerwa, rozmowa prywatna — plik
+        # bez luki, licznik stoi) i fragment (F8) — znacznik, który po
+        # transkrypcji stoi w tekście tam, gdzie padło coś ważnego.
+        gora = tk.Frame(wnetrze, bg=BG_CARD)
+        gora.grid(row=0, column=0, columnspan=3, sticky="ew")
+        gora.columnconfigure(2, weight=1)
+        self.rec_btn = ttk.Button(gora, text=t("Nagrywaj spotkanie"),
                                   command=self.przelacz_nagrywanie)
-        self.rec_btn.grid(row=0, column=0, rowspan=2, sticky="w")
-
-        # Licznik z kropką, która miga w trakcie nagrywania.
-        licznik = tk.Frame(wnetrze, bg=BG_CARD)
-        licznik.grid(row=0, column=1, rowspan=2, sticky="w", padx=(18, 10))
+        self.rec_btn.grid(row=0, column=0, sticky="w")
+        licznik = tk.Frame(gora, bg=BG_CARD)
+        licznik.grid(row=0, column=1, sticky="w", padx=(18, 10))
         self.rec_kropka = tk.Label(licznik, text="●", bg=BG_CARD, fg=BG_CARD,
                                    font=(theme.FONT, 10))
         self.rec_kropka.pack(side="left", padx=(0, 4))
         self.rec_czas = tk.Label(licznik, text="0:00:00", bg=BG_CARD, fg=FG_DIM,
                                  font=(theme.FONT_SEMI, 15), width=7, anchor="w")
         self.rec_czas.pack(side="left")
-
-        # Dwa cienkie wskaźniki poziomu: mikrofon i dźwięk spotkania.
-        self.rec_paski = {}
-        for i, (klucz, tekst) in enumerate((("mikrofon", t("Mikrofon")),
-                                            ("system", t("Dźwięk spotkania")))):
-            tk.Label(wnetrze, text=tekst, bg=BG_CARD, fg=FG_DIM, font=(theme.FONT, 9),
-                     anchor="w", width=15).grid(row=i, column=2, sticky="w", padx=(10, 8))
-            pasek = theme.PasekPostepu(wnetrze, maximum=1000, grubosc=4, podloze=BG_CARD)
-            pasek.grid(row=i, column=3, sticky="ew", pady=(6, 6) if i == 0 else (2, 2))
-            self.rec_paski[klucz] = pasek
-
-        # W trakcie nagrania: pauza (przerwa, rozmowa prywatna — plik bez
-        # luki, licznik stoi) i „Zaznacz moment” (F8) — znacznik czasu, który
-        # po transkrypcji stoi w tekście tam, gdzie padło coś ważnego.
-        akcje = tk.Frame(wnetrze, bg=BG_CARD)
-        akcje.grid(row=2, column=3, sticky="e", pady=(8, 0))
+        akcje = tk.Frame(gora, bg=BG_CARD)
+        akcje.grid(row=0, column=3, sticky="e")
         self.rec_pauza_btn = ttk.Button(akcje, text=t("Pauza"), width=9, state="disabled",
                                         command=self.przelacz_pauze)
         self.rec_pauza_btn.pack(side="left")
@@ -672,14 +775,47 @@ class App:
         self.rec_znacznik_btn.pack(side="left", padx=(6, 0))
         self.root.bind("<F8>", lambda _e: self.zaznacz_moment())
 
-        # Źródła: cicha linia z odnośnikiem do zmiany.
-        zrodla = tk.Frame(wnetrze, bg=BG_CARD)
-        zrodla.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
-        self.rec_zrodla = tk.Label(zrodla, text="", bg=BG_CARD, fg=FG_FAINT,
-                                   font=(theme.FONT, 9), anchor="w")
-        self.rec_zrodla.pack(side="left")
-        self._link(zrodla, t("Zmień…"), self.wybierz_urzadzenia, tlo=BG_CARD).pack(
-            side="left", padx=(8, 0))
+        tk.Frame(wnetrze, bg=theme.BORDER, height=1).grid(
+            row=1, column=0, columnspan=3, sticky="ew", pady=(12, 10))
+
+        # Źródła: podpis, lista (styl jak „Język nagrania” w panelu), pod
+        # urządzeniami cienki wskaźnik poziomu.
+        self.rec_paski = {}
+        self.rec_listy = {}
+        for i, (klucz, tekst, pasek) in enumerate((
+                ("mikrofon", t("Mikrofon"), "mikrofon"),
+                ("glosniki", t("Dźwięk spotkania"), "system"),
+                ("obraz", t("Obraz"), None))):
+            wiersz = 2 + 2 * i
+            odstep = (0 if i == 0 else 8, 0)
+            ttk.Label(wnetrze, text=tekst, style="Card.Dim.TLabel").grid(
+                row=wiersz, column=0, sticky="w", padx=(0, 14), pady=odstep)
+            var = tk.StringVar()
+            # Własny styl każdej listy — _poszerz_liste ustawia w nim szerokość
+            # rozwiniętej listy.
+            box = ttk.Combobox(wnetrze, textvariable=var, state="readonly", width=10,
+                               style=f"Zrodlo{i}.TCombobox",
+                               postcommand=lambda k=klucz: self._rozwin_zrodlo(k))
+            # Mikrofon ma obok „Sprawdź”, reszta sięga do prawego brzegu karty.
+            szer = 1 if klucz == "mikrofon" else 2
+            box.grid(row=wiersz, column=1, columnspan=szer, sticky="ew", pady=odstep)
+            box.bind("<<ComboboxSelected>>", lambda _e, k=klucz: self._po_wyborze_zrodla(k))
+            # Kółko myszy nad listą zmieniałoby po cichu mikrofon albo obraz.
+            box.bind("<MouseWheel>", lambda _e: "break")
+            self.rec_listy[klucz] = (var, box)
+            if pasek:
+                p = theme.PasekPostepu(wnetrze, maximum=1000, grubosc=3, podloze=BG_CARD)
+                p.grid(row=wiersz + 1, column=1, columnspan=szer, sticky="ew", pady=(3, 0))
+                self.rec_paski[pasek] = p
+        self.rec_sprawdz_btn = ttk.Button(wnetrze, text=t("Sprawdź"),
+                                          command=self.sprawdz_mikrofon)
+        self.rec_sprawdz_btn.grid(row=2, column=2, sticky="e", padx=(8, 0))
+        # Okno ⇄ cały ekran w trakcie nagrania (udostępnianie ekranu) —
+        # przy liście obrazu, widoczny tylko przy nagraniu z obrazem.
+        self.rec_obraz_btn = ttk.Button(wnetrze, text=t("⇄ Cały ekran"),
+                                        command=self.przelacz_obraz)
+        self.rec_obraz_btn.grid(row=6, column=2, sticky="e", padx=(8, 0), pady=(8, 0))
+        self.rec_obraz_btn.grid_remove()
         self._odswiez_zrodla()
         self._odswiez_punkty()
 
@@ -688,17 +824,168 @@ class App:
         return nagrywarka is not None and nagrywarka.trwa
 
     def _odswiez_zrodla(self) -> None:
-        """Linia pod paskami: z czego naprawdę pójdzie nagranie, po ludzku.
+        """Listy źródeł na karcie: wpisy i to, co wybrane.
 
-        Nazwa z ustawień (pusta = domyślne w Windows) spotyka się z tym, co
-        Windows wie o urządzeniu: „wbudowany”, „zestaw słuchawkowy USB”,
-        „monitor / telewizor (HDMI)”. Bez tej wiedzy zostaje sama nazwa.
+        Poza nagraniem — ustawienia, w trakcie — to, z czego obraz idzie
+        naprawdę (mógł zostać przełączony na cały ekran i z powrotem).
         """
+        self._wypelnij_urzadzenie("mikrofon")
+        self._wypelnij_urzadzenie("glosniki")
+        nagrywa = self._nagrywa()
+        if nagrywa:
+            var, _box = self.rec_listy["obraz"]
+            var.set(wideo.opis_zrodla(self._obraz_teraz) if self._obraz_teraz is not None
+                    else t("Sam dźwięk — bez obrazu"))
+        else:
+            self._wypelnij_obraz(wideo.okna(), wideo.ekrany())
+        for klucz, (_var, box) in self.rec_listy.items():
+            wylaczona = nagrywa or (klucz == "obraz" and self._obraz_dostepny is False)
+            box.configure(state="disabled" if wylaczona else "readonly")
+
+    def _wypelnij_urzadzenie(self, klucz: str) -> None:
+        """Mikrofony albo urządzenia odtwarzania, które Windows teraz widzi.
+
+        Nazwy Windows (core/urzadzenia.py) są tymi samymi nazwami, po których
+        nagrywanie szuka urządzenia w PortAudio — ustawienie zapisuje nazwę.
+        """
+        var, box = self.rec_listy[klucz]
+        wejscie = klucz == "mikrofon"
+        zapisane = getattr(self.settings, f"nagranie_{klucz}")
+        mapa = self._mapy_zrodel[klucz]
+        mapa.clear()
+        domyslne = urzadzenia.znajdz(self._punkty, "", wejscie)
+        nazwa_dom = t("Domyślny w Windows") if wejscie else t("Domyślne w Windows")
+        wpis_dom = nazwa_dom if domyslne is None else t("{domyslne} — teraz: {co}").format(
+            domyslne=nazwa_dom,
+            co=urzadzenia.opis_rodzaju(domyslne) or _skroc_srodek(domyslne.nazwa))
+        mapa[wpis_dom] = ""
+        wpisy, wybrany = [wpis_dom], wpis_dom
+        for p in self._punkty:
+            if p.wejscie != wejscie:
+                continue
+            wpis = _wpis_urzadzenia(p)
+            if wpis in mapa:  # dwa takie same urządzenia — pełna nazwa rozróżni
+                wpis += "  · " + p.nazwa
+            mapa[wpis] = p.nazwa
+            wpisy.append(wpis)
+            if p.nazwa == zapisane:
+                wybrany = wpis
+        if zapisane and wybrany == wpis_dom:
+            # Wybrane kiedyś, teraz odłączone: nagranie pójdzie z domyślnego,
+            # a wybór zostaje na liście, dopóki ktoś go nie zmieni.
+            wpis = t("{nazwa} (odłączone — pójdzie domyślne)").format(nazwa=_skroc(zapisane, 30))
+            mapa[wpis] = zapisane
+            wpisy.insert(1, wpis)
+            wybrany = wpis
+        box.configure(values=wpisy)
+        var.set(wybrany)
+
+    def _wypelnij_obraz(self, okna, ekrany) -> None:
+        """Sam dźwięk, okno spotkania samo, cały ekran albo konkretne okno."""
+        var, box = self.rec_listy["obraz"]
         s = self.settings
-        self.rec_zrodla.configure(
-            text=t("Mikrofon: {mik}  ·  Dźwięk spotkania z: {system}").format(
-                mik=self._opis_zrodla(s.nagranie_mikrofon, True),
-                system=self._opis_zrodla(s.nagranie_glosniki, False)))
+        mapa = self._mapy_zrodel["obraz"]
+        mapa.clear()
+        sam = t("Sam dźwięk — bez obrazu")
+        mapa[sam] = None
+        if self._obraz_dostepny is False:
+            box.configure(values=[sam])
+            var.set(sam)
+            return
+        auto = t("Okno spotkania — samo znajdzie Zoom, Teams, Meet…")
+        mapa[auto] = OBRAZ_AUTO
+        wpisy = [sam, auto]
+        wybrany = auto if s.nagranie_obraz else sam
+        ekran_zapamietany = (wideo.wybierz_ekran(ekrany, s.nagranie_ekran)
+                             if s.nagranie_ekran else None)
+        for ekran in ekrany:
+            wpis = wideo.opis_ekranu(ekran, len(ekrany))
+            mapa[wpis] = ekran
+            wpisy.append(wpis)
+            if s.nagranie_obraz and ekran is ekran_zapamietany:
+                wybrany = wpis
+        okno_zapamietane = wideo.wybierz_okno(okna, s.nagranie_okno_program,
+                                              s.nagranie_okno_tytul)
+        okno_wybrane = s.nagranie_obraz and not s.nagranie_ekran
+        if okno_wybrane and s.nagranie_okno_program and okno_zapamietane is None:
+            # Program zapamiętany, ale teraz zamknięty — wybór zostaje,
+            # okno weźmiemy przy starcie nagrania.
+            wpis = t("{program} — teraz zamknięty; okno wezmę przy starcie nagrania").format(
+                program=wideo.nazwa_programu(s.nagranie_okno_program))
+            mapa[wpis] = (s.nagranie_okno_program, s.nagranie_okno_tytul)
+            wpisy.append(wpis)
+            wybrany = wpis
+        for okno in okna:
+            wpis = wideo.opis_okna(okno)
+            while wpis in mapa:  # dwa okna o tym samym tytule
+                wpis += " "
+            mapa[wpis] = okno
+            wpisy.append(wpis)
+            if okno_wybrane and okno is okno_zapamietane:
+                wybrany = wpis
+        box.configure(values=wpisy)
+        var.set(wybrany)
+
+    def _rozwin_zrodlo(self, klucz: str) -> None:
+        """Lista się rozwija: świeże urządzenia albo okna (zestaw podłączony
+        przed chwilą ma już na niej być) i szerokość na najdłuższy wpis."""
+        if klucz == "obraz":
+            self._wypelnij_obraz(wideo.okna(), wideo.ekrany())
+        else:
+            punkty = urzadzenia.punkty()
+            if punkty:
+                self._punkty = punkty
+            self._wypelnij_urzadzenie(klucz)
+        self._poszerz_liste(klucz)
+
+    def _poszerz_liste(self, klucz: str) -> None:
+        """Rozwinięta lista ttk ma szerokość pola i ucięłaby długie nazwy
+        urządzeń i okien. `postoffset` w stylu pola mówi, o ile ma być
+        szersza (ttk::combobox::PlacePopdown dolicza go przy każdym
+        rozwinięciu) — nie dalej niż do prawej krawędzi ekranu."""
+        _var, box = self.rec_listy[klucz]
+        potrzeba = max((self._czcionka_listy.measure(w) for w in box["values"]), default=0) + 40
+        do_krawedzi = box.winfo_screenwidth() - box.winfo_rootx() - 8
+        dodatek = max(0, min(potrzeba, do_krawedzi) - box.winfo_width())
+        ttk.Style(self.root).configure(box.cget("style"), postoffset=(0, 0, dodatek, 0))
+
+    def _po_wyborze_zrodla(self, klucz: str) -> None:
+        """Wybór z listy na karcie zapisuje się od razu — bez okna i „Zapisz”."""
+        var, box = self.rec_listy[klucz]
+        box.selection_clear()
+        mapa = self._mapy_zrodel[klucz]
+        if var.get() not in mapa:
+            return
+        wybor = mapa[var.get()]
+        s = self.settings
+        podpowiedz = ""
+        if klucz != "obraz":
+            setattr(s, f"nagranie_{klucz}", wybor)
+        else:
+            s.nagranie_obraz = wybor is not None
+            # Ekran i okno się wykluczają; „samo” — oba puste.
+            s.nagranie_ekran = wybor.urzadzenie if isinstance(wybor, wideo.Ekran) else ""
+            if isinstance(wybor, wideo.Okno):
+                s.nagranie_okno_program, s.nagranie_okno_tytul = wybor.program, wybor.tytul
+            elif isinstance(wybor, tuple):
+                s.nagranie_okno_program, s.nagranie_okno_tytul = wybor
+            else:
+                s.nagranie_okno_program = s.nagranie_okno_tytul = ""
+            if isinstance(wybor, wideo.Ekran):
+                podpowiedz = t("Nagra się wszystko, co widać na ekranie — także powiadomienia. "
+                               "Obraz trafi do pliku MKV obok nagrania.")
+            elif wybor is OBRAZ_AUTO:
+                podpowiedz = t("Przy starcie nagrania program sam znajdzie okno spotkania. "
+                               "Obraz trafi do pliku MKV obok nagrania.")
+            elif wybor is not None:
+                podpowiedz = t("Okno nagrywa się także zasłonięte innymi oknami. "
+                               "Obraz trafi do pliku MKV obok nagrania.")
+        s.save()
+        if klucz == "obraz" and s.nagranie_obraz:
+            self._rozgrzej_obraz()
+        self._odswiez_zrodla()
+        if podpowiedz and not self._busy():
+            self.status_var.set(podpowiedz)
 
     def _opis_zrodla(self, nazwa: str, wejscie: bool) -> str:
         p = urzadzenia.znajdz(self._punkty, nazwa, wejscie)
@@ -740,9 +1027,16 @@ class App:
         return Path(self.settings.output_dir or str(default_output_dir())) / "Nagrania"
 
     def rozpocznij_nagrywanie(self) -> None:
+        if self._probka_trwa():
+            messagebox.showinfo(APP_TITLE, t("Poczekaj, aż skończy się próbka mikrofonu."),
+                                parent=self.root)
+            return
         settings = self._collect_settings()
         settings.save()
         self._zaproponuj_zestaw(settings)
+        zrodlo = self._zrodlo_obrazu(settings)
+        if zrodlo is False:
+            return
         put = self.events.put
         zdarzenia = nagrywanie.ZdarzeniaNagrywania(
             poziomy=lambda m, s: put(("nagranie_poziomy", m, s)),
@@ -753,19 +1047,27 @@ class App:
             anulowano=lambda: put(("nagranie_anulowane",)),
             pauza=lambda p: put(("nagranie_pauza", p)),
             urzadzenia=lambda u: put(("urzadzenia_okno", u)),
+            obraz=lambda p, b: put(("nagranie_obraz", str(p) if p else "", b)),
+            okno_spotkania=lambda s: put(("nagranie_okno_spotkania", s)),
+            zrodlo_obrazu=lambda z: put(("nagranie_zrodlo_obrazu", z)),
         )
         try:
             plik = self.nagrywarka.start(
                 self._katalog_nagran(), settings.nagranie_mikrofon,
-                settings.nagranie_glosniki, zdarzenia)
+                settings.nagranie_glosniki, zdarzenia, zrodlo_obrazu=zrodlo)
         except nagrywanie.BladNagrywania as exc:
             messagebox.showerror(APP_TITLE, str(exc), parent=self.root)
             return
         self._nagranie_plik = plik
         self._nagranie_sys_cicho_od = None
         self._nagranie_podpowiedziano = False
+        self._obraz_teraz = zrodlo
+        self._okno_nagrania = zrodlo if isinstance(zrodlo, wideo.Okno) else None
+        self._okno_schowane = None
         self._ustaw_stan_nagrywania(True)
         self.log(t("Nagrywam spotkanie: {plik}").format(plik=plik.name))
+        if zrodlo is not None:
+            self.log(t("Nagrywam też obraz: {zrodlo}").format(zrodlo=wideo.opis_zrodla(zrodlo)))
         self.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
 
     def zatrzymaj_nagrywanie(self) -> None:
@@ -799,34 +1101,65 @@ class App:
             self._migaj_kropka()
 
     def zaznacz_moment(self) -> None:
+        """„Zaznacz” (F8): pierwsze naciśnięcie zaczyna fragment, drugie go kończy.
+
+        Dwa szybkie naciśnięcia (krócej niż 2 s) to pojedynczy moment. Przycisk
+        w trakcie fragmentu jest wyróżniony i mówi „Zakończ” — widać, że coś
+        się dzieje (w 1.6.0 zostawał bez zmian i nie było wiadomo, czy działa).
+        """
         if not self._nagrywa():
             return
-        wpis = self.nagrywarka.znacznik()
+        wpis = self.nagrywarka.zaznacz()
         if wpis is None:
             return
-        czas = _hms(wpis["czas"])
-        self.log(t("Znacznik {czas}").format(czas=czas))
-        self.status_var.set(t("Zaznaczono moment {czas} — w transkrypcji będzie ⚑.").format(czas=czas))
+        od = _hms(wpis["czas"])
+        if wpis["otwarty"]:
+            self.rec_znacznik_btn.configure(text=t("⚑ Zakończ (F8)"), style="Accent.TButton")
+            self.log(t("Fragment {n}: początek {czas}").format(n=wpis["nr"], czas=od))
+            self.status_var.set(t("Zaznaczasz fragment {n} od {czas} — naciśnij „Zakończ” (F8), "
+                                  "gdy się skończy.").format(n=wpis["nr"], czas=od))
+            return
+        self.rec_znacznik_btn.configure(text=t("⚑ Zaznacz (F8)"), style="TButton")
+        if wpis["koniec"] is None:
+            self.log(t("Znacznik {czas}").format(czas=od))
+            self.status_var.set(t("Zaznaczono moment {czas} — w transkrypcji będzie ⚑.").format(czas=od))
+            return
+        do = _hms(wpis["koniec"])
+        self.log(t("Fragment {n}: {od}–{do}").format(n=wpis["nr"], od=od, do=do))
+        self.status_var.set(t("Fragment {n}: {od}–{do} — w transkrypcji będzie oznaczony ⚑.").format(
+            n=wpis["nr"], od=od, do=do))
 
     def _ustaw_stan_nagrywania(self, nagrywa: bool) -> None:
         if nagrywa:
             self.rec_btn.configure(text=t("Zatrzymaj nagranie"), style="Stop.TButton",
                                    state="normal")
             self.rec_pauza_btn.configure(state="normal", text=t("Pauza"))
-            self.rec_znacznik_btn.configure(state="normal")
+            self.rec_znacznik_btn.configure(state="normal", text=t("⚑ Zaznacz (F8)"),
+                                            style="TButton")
+            self.rec_sprawdz_btn.configure(state="disabled")
             self.rec_czas.configure(fg=FG)
             self.start_btn.configure(state="disabled")
             self._migaj_kropka()
+            # Listy źródeł stoją (wybór działa od następnego nagrania), lista
+            # obrazu pokazuje, co nagrywa się teraz; obok — „⇄ Cały ekran”.
+            self._odswiez_zrodla()
+            self._ustaw_przycisk_obrazu()
         else:
             self.rec_btn.configure(text=t("Nagrywaj spotkanie"), style="TButton", state="normal")
             self.rec_pauza_btn.configure(state="disabled", text=t("Pauza"))
-            self.rec_znacznik_btn.configure(state="disabled")
+            self.rec_znacznik_btn.configure(state="disabled", text=t("⚑ Zaznacz (F8)"),
+                                            style="TButton")
+            self.rec_sprawdz_btn.configure(state="normal")
             self.rec_czas.configure(text="0:00:00", fg=FG_DIM)
             self.rec_kropka.configure(fg=BG_CARD)
             for pasek in self.rec_paski.values():
                 pasek["value"] = 0
             if not self._busy():
                 self.start_btn.configure(state="normal")
+            self._zamknij_dymek()
+            self._obraz_teraz = self._okno_nagrania = self._okno_schowane = None
+            self._ustaw_przycisk_obrazu()
+            self._odswiez_zrodla()
 
     def _migaj_kropka(self) -> None:
         if not self._nagrywa():
@@ -854,7 +1187,7 @@ class App:
               and teraz - self._nagranie_sys_cicho_od > 30.0):
             self._nagranie_podpowiedziano = True
             tekst = t("Nie słychać dźwięku spotkania. Sprawdź, na jakie urządzenie gra "
-                      "Teams, i wskaż je w „Zmień…”.")
+                      "Teams, i po nagraniu wybierz je w polu „Dźwięk spotkania”.")
             self.status_var.set(tekst)
             self.log(t("UWAGA (nagrywanie): {tekst}").format(tekst=tekst))
 
@@ -882,12 +1215,224 @@ class App:
             self.status_var.set(t("Nagranie zapisane ({czas}). Zaczynam transkrypcję…").format(czas=opis))
             self.root.after(300, lambda: self.start(tylko_nowe=True))
 
+    def _zrodlo_obrazu(self, settings: Settings):
+        """Co idzie do MKV: cały ekran albo okno zapamiętanego programu teraz.
+
+        None — nagrywamy sam dźwięk; False — użytkownik woli nie zaczynać
+        (otworzy spotkanie i kliknie jeszcze raz).
+        """
+        program = settings.nagranie_okno_program
+        if not settings.nagranie_obraz:
+            return None
+        if not wideo.dostepne():
+            self.log(t("UWAGA (nagrywanie): {tekst}").format(
+                tekst=t("Ten ffmpeg nie umie nagrywać okien — nagrywam sam dźwięk.")))
+            return None
+        if settings.nagranie_ekran:
+            return wideo.wybierz_ekran(wideo.ekrany(), settings.nagranie_ekran)
+        lista = wideo.okna()
+        if not program:
+            # Automatycznie: okno programu do spotkań (lista ma rozmowy na
+            # początku — okno spotkania Teams przed czatem).
+            okno = next((o for o in lista if wideo.czy_spotkanie(o)), None)
+            if okno is not None:
+                return okno
+            odpowiedz = messagebox.askyesnocancel(APP_TITLE, t(
+                "Nie widzę okna spotkania (Zoom, Teams, Meet…).\n\n"
+                "Tak — nagrywaj cały ekran\nNie — nagrywaj sam dźwięk\n"
+                "Anuluj — nie zaczynaj: otwórz spotkanie i kliknij „Nagrywaj spotkanie” "
+                "jeszcze raz"), parent=self.root)
+            if odpowiedz is None:
+                return False
+            return wideo.wybierz_ekran(wideo.ekrany(), "") if odpowiedz else None
+        okno = wideo.wybierz_okno(lista, program, settings.nagranie_okno_tytul)
+        if okno is not None:
+            return okno
+        pytanie = t("Okno programu {program} nie jest otwarte, więc obrazu nie ma skąd wziąć.\n\n"
+                    "Nagrywać sam dźwięk?\n„Nie” — otwórz spotkanie i kliknij "
+                    "„Nagrywaj spotkanie” jeszcze raz.").format(
+            program=wideo.nazwa_programu(program))
+        if messagebox.askyesno(APP_TITLE, pytanie, parent=self.root):
+            return None
+        return False
+
+    # -- obraz w trakcie nagrania: okno ⇄ cały ekran --------------------------
+
+    def _ustaw_przycisk_obrazu(self) -> None:
+        """„⇄ Cały ekran” przy nagrywaniu okna, „⇄ Okno” przy nagrywaniu ekranu."""
+        z = self._obraz_teraz
+        _var, lista = self.rec_listy["obraz"]
+        if z is None or not self._nagrywa():
+            self.rec_obraz_btn.grid_remove()
+            lista.grid_configure(columnspan=2)
+        else:
+            self.rec_obraz_btn.configure(
+                state="normal",
+                text=t("⇄ Okno") if isinstance(z, wideo.Ekran) else t("⇄ Cały ekran"))
+            lista.grid_configure(columnspan=1)
+            self.rec_obraz_btn.grid()
+
+    def _ekrany_po_kolei(self, ekrany):
+        """Monitor okna spotkania pierwszy — ten zwykle się udostępnia."""
+        okno = self._okno_nagrania
+        pierwszy = wideo.ekran_okna(okno.hwnd, ekrany) if okno is not None else None
+        return sorted(ekrany, key=lambda e: e is not pierwszy)
+
+    def przelacz_obraz(self) -> None:
+        """Przycisk na karcie: okno ⇄ cały ekran w trakcie nagrania.
+
+        Przy kilku monitorach — menu, który ekran (udostępniany).
+        """
+        if not self._nagrywa() or self._obraz_teraz is None:
+            return
+        if isinstance(self._obraz_teraz, wideo.Ekran):
+            self._wroc_do_okna()
+            return
+        ekrany = self._ekrany_po_kolei(wideo.ekrany())
+        if len(ekrany) <= 1:
+            if ekrany:
+                self._na_zrodlo(ekrany[0])
+            return
+        menu = tk.Menu(self.root, tearoff=0)
+        for ekran in ekrany:
+            menu.add_command(label=wideo.opis_ekranu(ekran, len(ekrany)),
+                             command=lambda e=ekran: self._na_zrodlo(e))
+        przycisk = self.rec_obraz_btn
+        menu.tk_popup(przycisk.winfo_rootx(), przycisk.winfo_rooty() + przycisk.winfo_height())
+
+    def _wroc_do_okna(self) -> None:
+        okno = self._okno_nagrania
+        if okno is None or not wideo.okno_istnieje(okno.hwnd):
+            s = self.settings
+            lista = wideo.okna()
+            okno = (wideo.wybierz_okno(lista, s.nagranie_okno_program, s.nagranie_okno_tytul)
+                    or next((o for o in lista if wideo.czy_spotkanie(o)), None))
+        if okno is None:
+            self.status_var.set(t("Nie widzę okna spotkania — obraz zostaje z całego ekranu."))
+            return
+        self._na_zrodlo(okno)
+
+    def _na_zrodlo(self, zrodlo) -> None:
+        if not self._nagrywa():
+            return
+        self._zamknij_dymek()
+        self.nagrywarka.przelacz_obraz(zrodlo)
+        self.rec_obraz_btn.configure(state="disabled")
+        self.status_var.set(t("Przełączam obraz…"))
+
+    def _po_zmianie_obrazu(self, zrodlo) -> None:
+        """Wątek nagrywania potwierdził: obraz idzie z nowego źródła."""
+        if not self._nagrywa():
+            return
+        self._obraz_teraz = zrodlo
+        if isinstance(zrodlo, wideo.Okno):
+            self._okno_nagrania = zrodlo
+        self._ustaw_przycisk_obrazu()
+        self._odswiez_zrodla()
+        tekst = t("Obraz przełączony na: {zrodlo}").format(zrodlo=wideo.opis_zrodla(zrodlo))
+        self.log(tekst)
+        self.status_var.set(tekst)
+
+    def _po_oknie_spotkania(self, schowane: bool) -> None:
+        """Okno spotkania schowało się albo wróciło. Pytamy, gdy stan
+        utrzyma się 1,5 s — Zoom przy starcie udostępniania potrafi mignąć."""
+        self._okno_schowane = schowane
+        self.root.after(1500, lambda: self._zapytaj_o_obraz(schowane))
+
+    def _zapytaj_o_obraz(self, schowane: bool) -> None:
+        if not self._nagrywa() or self._okno_schowane != schowane or self._obraz_teraz is None:
+            return
+        ekran_teraz = isinstance(self._obraz_teraz, wideo.Ekran)
+        if schowane and not ekran_teraz:
+            self._dymek_caly_ekran()
+        elif not schowane and ekran_teraz:
+            self._dymek_okno()
+        else:
+            self._zamknij_dymek()
+
+    def _dymek_caly_ekran(self) -> None:
+        ekrany = self._ekrany_po_kolei(wideo.ekrany())
+        if not ekrany:
+            return
+        if len(ekrany) == 1:
+            przyciski = [(t("Przełącz na cały ekran"), lambda: self._na_zrodlo(ekrany[0]), True)]
+        else:
+            przyciski = [(wideo.opis_ekranu(e, len(ekrany)), lambda e=e: self._na_zrodlo(e), i == 0)
+                         for i, e in enumerate(ekrany)]
+        przyciski.append((t("Nie teraz"), lambda: None, False))
+        self.log(t("Okno spotkania się schowało — pytam, czy nagrywać cały ekran."))
+        self._pokaz_dymek(
+            t("Okno spotkania się schowało"),
+            t("Udostępniasz ekran? Żeby było go widać w nagraniu, przełącz obraz na cały ekran. "
+              "Nagra się wszystko, co na nim widać — także powiadomienia."),
+            przyciski)
+
+    def _dymek_okno(self) -> None:
+        self.log(t("Okno spotkania wróciło — pytam, czy wrócić do nagrywania okna."))
+        self._pokaz_dymek(
+            t("Okno spotkania wróciło"),
+            t("Udostępnianie skończone? Przełącz obraz z powrotem na okno spotkania — cały "
+              "ekran nagrywa też wszystko inne, co na nim robisz."),
+            [(t("Wróć do okna spotkania"), self._wroc_do_okna, True),
+             (t("Zostaw cały ekran"), lambda: None, False)])
+
+    def _pokaz_dymek(self, tytul: str, tekst: str, przyciski) -> None:
+        """Dymek w rogu ekranu, na wierzchu (program jest wtedy zwykle w tle)."""
+        from .dymek import Dymek
+
+        self._zamknij_dymek()
+        self.status_var.set(tekst)
+        self._dymek = Dymek(self.root, tytul, tekst, przyciski, czas_s=60)
+        self._zwroc_uwage(dzwiek=False)
+
+    def _zamknij_dymek(self) -> None:
+        if self._dymek is not None:
+            self._dymek.zamknij()
+            self._dymek = None
+
+    def _po_obrazie(self, sciezka: str, blad: str) -> None:
+        """Obraz spotkania złożony w tle, już po zapisaniu dźwięku."""
+        if blad:
+            self.log(t("Nie udało się złożyć obrazu spotkania: {blad}. Odcinki obrazu "
+                       "(.ts) zostały w folderze Nagrania — każdy da się obejrzeć osobno.")
+                     .format(blad=blad))
+            return
+        self.log(t("Obraz spotkania zapisany: {plik}").format(plik=Path(sciezka).name))
+        if not self._busy() and not self._nagrywa():
+            self.status_var.set(t("Obraz spotkania zapisany: {plik}").format(plik=Path(sciezka).name))
+
+    def _rozgrzej_obraz(self, koder: bool = True) -> None:
+        """W tle: ffmpeg z gfxcapture i próba koderów (~1 s), zanim padnie
+        „Nagrywaj spotkanie” — obraz rusza wtedy od razu. Przy okazji
+        składa obraz, którego składanie przerwało zamknięcie programu,
+        i mówi liście „Obraz”, czy ten komputer w ogóle nagra obraz."""
+        katalog = self._katalog_nagran()
+
+        def praca() -> None:
+            sciezka = wideo.ffmpeg()
+            self.events.put(("obraz_dostepny", bool(sciezka)))
+            if sciezka and koder:
+                wideo.koder(sciezka)
+            for plik in wideo.dokoncz_skladanie(katalog):
+                self.events.put(("nagranie_obraz", str(plik), ""))
+
+        threading.Thread(target=praca, daemon=True).start()
+
+    def _po_sprawdzeniu_obrazu(self, dostepny: bool) -> None:
+        if dostepny == self._obraz_dostepny:
+            return
+        self._obraz_dostepny = dostepny
+        if not dostepny:
+            self.log(t("UWAGA (nagrywanie): {tekst}").format(tekst=t(
+                "Nagrywanie obrazu wymaga ffmpeg 9 lub nowszego — jest w instalatorze programu.")))
+        self._odswiez_zrodla()
+
     def _zaproponuj_zestaw(self, settings: Settings) -> None:
         """Podłączony zestaw słuchawkowy (USB, Bluetooth, słuchawki), a nagranie
         poszłoby z mikrofonu i głośników komputera — pytamy przed startem.
 
         To był prawdziwy przypadek: mikrofon wbudowany wskazany kiedyś
-        z nazwy w „Zmień…” zostawał na stałe, choć do rozmowy podłączono
+        z nazwy zostawał na stałe, choć do rozmowy podłączono
         zestaw. „Tak” zapamiętuje zestaw w ustawieniach; gdy go nie będzie,
         nagranie wróci do domyślnego (z wpisem w dzienniku). „Nie” — nie
         pytamy o ten zestaw do końca sesji.
@@ -908,7 +1453,7 @@ class App:
             if p is not None)
         pytanie = t("Podłączony jest zestaw słuchawkowy:\n{zestaw}\n\n"
                     "Nagranie poszłoby z: {obecne}.\n\n"
-                    "Nagrywać przez zestaw słuchawkowy? Zapamiętam go w „Zmień…”."
+                    "Nagrywać przez zestaw słuchawkowy? Zapamiętam go na karcie nagrywania."
                     ).format(zestaw=zestaw, obecne=obecne)
         if messagebox.askyesno(APP_TITLE, pytanie, parent=self.root):
             if mik is not None:
@@ -933,124 +1478,106 @@ class App:
         self._collect_settings()
         glosy_okno.otworz(self.root, self.settings, log=self.log)
 
-    def wybierz_urzadzenia(self) -> None:
-        """Małe okno: mikrofon i urządzenie, z którego bierzemy dźwięk spotkania."""
-        if self._nagrywa():
-            messagebox.showinfo(APP_TITLE, t("Źródła zmienisz po zatrzymaniu nagrania."),
-                                parent=self.root)
+    # -- „Sprawdź” przy mikrofonie: próbka i odsłuch ---------------------------
+
+    def sprawdz_mikrofon(self) -> None:
+        """5 s z mikrofonu wybranego na liście, potem od razu odsłuch.
+
+        Poziom idzie na pasek pod mikrofonem, ocena — na pasek stanu.
+        """
+        if self._nagrywa() or self._probka_trwa():
             return
-        if self._okno_urzadzen is not None and self._okno_urzadzen[0].winfo_exists():
-            self._okno_urzadzen[0].lift()
-            return
-        okno = tk.Toplevel(self.root)
-        okno.title(t("Źródła nagrania"))
-        okno.configure(bg=BG)
-        okno.resizable(False, False)
-        okno.transient(self.root)
-        tresc = tk.Frame(okno, bg=BG, padx=24, pady=18)
-        tresc.pack(fill="both", expand=True)
-        tresc.columnconfigure(0, weight=1)
+        from . import speakers
 
-        WCZYTUJE = t("Wczytuję listę urządzeń…")
-        pola = {}
-        #: Wpis na liście (nazwa + „co to jest”) → nazwa dla ustawień;
-        #: wpis „Domyślne…” → pusta nazwa.
-        mapa = {}
-        opisy = (("mikrofon", t("Mikrofon")),
-                 ("glosniki", t("Dźwięk spotkania z urządzenia (tego, na którym gra Teams)")))
-        for i, (klucz, tekst) in enumerate(opisy):
-            tk.Label(tresc, text=tekst, bg=BG, fg=FG_DIM, font=(theme.FONT, 9),
-                     anchor="w").grid(row=2 * i, column=0, sticky="w",
-                                      pady=((0 if i == 0 else 12), 2))
-            var = tk.StringVar(value=WCZYTUJE)
-            box = ttk.Combobox(tresc, textvariable=var, state="readonly", width=86)
-            box.grid(row=2 * i + 1, column=0, sticky="ew")
-            pola[klucz] = (var, box)
-        tk.Label(
-            tresc, bg=BG, fg=FG_FAINT, font=(theme.FONT, 9), justify="left",
-            wraplength=600, anchor="w",
-            text=t("Przy każdym urządzeniu stoi, co to jest: słuchawki, głośniki komputera, "
-                   "monitor, mikrofon wbudowany. „Używa Teams” to urządzenie, na którym "
-                   "Windows prowadzi rozmowy. Słuchawki na zwykłym jacku grają przez "
-                   "„głośniki komputera” — Windows ich nie odróżnia.\n\n"
-                   "Najlepiej w słuchawkach: przy głośnikach mikrofon zbiera rozmówców "
-                   "drugi raz, z opóźnieniem. Zmiany działają od następnego nagrania."),
-        ).grid(row=4, column=0, sticky="w", pady=(14, 0))
+        speakers.cisza()
+        p = self._probka
+        self._usun_probke()
+        uchwyt, sciezka = tempfile.mkstemp(prefix="probka-mikrofonu-", suffix=".wav")
+        os.close(uchwyt)
+        plik = p["plik"] = Path(sciezka)
+        przerwij = p["przerwij"] = threading.Event()
+        nazwa = self.settings.nagranie_mikrofon
+        self.rec_sprawdz_btn.configure(state="disabled", text=t("● Mów…"))
+        self.status_var.set(t("Mów normalnie przez 5 sekund — potem usłyszysz, jak Cię słychać."))
+        put = self.events.put
 
-        def zapisz() -> None:
-            for klucz, (var, _box) in pola.items():
-                setattr(self.settings, f"nagranie_{klucz}", mapa.get(var.get(), ""))
-            self.settings.save()
-            self._odswiez_zrodla()
-            okno.destroy()
-
-        przyciski = tk.Frame(tresc, bg=BG)
-        przyciski.grid(row=5, column=0, sticky="e", pady=(18, 0))
-        ttk.Button(przyciski, text=t("Anuluj"), command=okno.destroy).pack(side="right", padx=(8, 0))
-        ttk.Button(przyciski, text=t("Zapisz"), style="Accent.TButton", command=zapisz).pack(
-            side="right")
-        okno.bind("<Escape>", lambda _e: okno.destroy())
-        okno.update_idletasks()
-        theme.ciemny_pasek_tytulu(okno)
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - okno.winfo_reqwidth()) // 2
-        y = self.root.winfo_rooty() + 120
-        okno.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-        self._okno_urzadzen = (okno, pola, mapa)
-
-        def wczytaj() -> None:
+        def praca() -> None:
             try:
-                wejscia, wyjscia = nagrywanie.lista_urzadzen()
+                urzadzenie, szczyt = nagrywanie.nagraj_probke_mikrofonu(
+                    nazwa, plik, 5.0, poziom=lambda db: put(("probka_poziom", db)),
+                    przerwij=przerwij)
             except Exception as exc:
-                self.events.put(("nagranie_urzadzenia", None, None, str(exc), []))
+                put(("probka_koniec", "", -120.0, str(exc) or type(exc).__name__))
                 return
-            self.events.put(("nagranie_urzadzenia",
-                             [u.nazwa for u in wejscia],
-                             [u.nazwa for u in wyjscia if u.loopback_index is not None],
-                             "", urzadzenia.punkty()))
+            put(("probka_koniec", urzadzenie, szczyt, ""))
 
-        threading.Thread(target=wczytaj, daemon=True).start()
+        p["watek"] = threading.Thread(target=praca, daemon=True, name="probka-mikrofonu")
+        p["watek"].start()
 
-    def _wypelnij_urzadzenia(self, wejscia, wyjscia, blad: str, punkty) -> None:
-        if self._okno_urzadzen is None or not self._okno_urzadzen[0].winfo_exists():
-            return
-        _okno, pola, mapa = self._okno_urzadzen
+    def _probka_trwa(self) -> bool:
+        p = getattr(self, "_probka", None)
+        return bool(p and p["watek"] is not None and p["watek"].is_alive())
+
+    def _po_poziomie_probki(self, dbfs: float) -> None:
+        if not self._nagrywa():
+            self.rec_paski["mikrofon"]["value"] = max(0.0, min(1.0, (dbfs + 60.0) / 60.0)) * 1000
+
+    def _po_probce(self, urzadzenie: str, szczyt: float, blad: str) -> None:
+        self.rec_sprawdz_btn.configure(state="disabled" if self._nagrywa() else "normal",
+                                       text=t("Sprawdź"))
+        if not self._nagrywa():
+            self.rec_paski["mikrofon"]["value"] = 0
         if blad:
-            for var, box in pola.values():
-                var.set(t("Nie udało się odczytać urządzeń") + f": {blad[:60]}")
+            tekst = t("Nie udało się nagrać próbki: {blad}").format(blad=blad)
+            self.status_var.set(tekst)
+            self.log(tekst)
             return
-        if punkty:
-            self._po_punktach(punkty)
-        DOMYSLNE = t("Domyślne (ustawienie Windows)")
-        mapa.clear()
-        for klucz, lista, zapisane, wejscie in (
-                ("mikrofon", wejscia, self.settings.nagranie_mikrofon, True),
-                ("glosniki", wyjscia, self.settings.nagranie_glosniki, False)):
-            var, box = pola[klucz]
-            # Nazwy daje PortAudio (te urządzenia da się otworzyć), a „co to
-            # jest” i kto jest domyślny — Windows; łączone po nazwie.
-            domyslne = urzadzenia.znajdz(punkty, "", wejscie)
-            wpis_dom = DOMYSLNE if domyslne is None else t("{domyslne} — teraz: {co}").format(
-                domyslne=DOMYSLNE,
-                co=urzadzenia.opis_rodzaju(domyslne) or _skroc_srodek(domyslne.nazwa))
-            mapa[wpis_dom] = ""
-            wpisy = [wpis_dom]
-            wybrany = wpis_dom
-            for nazwa in lista:
-                # Najpierw „co to jest”, potem nazwa techniczna (skrócona) —
-                # laik czyta początek wpisu, nie koniec.
-                p = urzadzenia.znajdz(punkty, nazwa, wejscie)
-                opis = urzadzenia.opis_rodzaju(p) if p is not None else ""
-                wpis = (f"{opis} — " if opis else "") + _skroc_srodek(nazwa)
-                if p is not None and p.domyslne:
-                    wpis += "  · " + t("domyślne w Windows")
-                if p is not None and p.komunikacyjne:
-                    wpis += "  · " + t("używa Teams")
-                mapa[wpis] = nazwa
-                wpisy.append(wpis)
-                if nazwa == zapisane:
-                    wybrany = wpis
-            box.configure(values=wpisy)
-            var.set(wybrany)
+        if szczyt < -50.0:
+            tekst = t("Prawie cisza ({db:.0f} dB) z: {urzadzenie}. Sprawdź, czy mikrofon "
+                      "nie jest wyciszony i czy to właściwe urządzenie.")
+        elif szczyt > -3.0:
+            tekst = t("Bardzo głośno ({db:.0f} dB) z: {urzadzenie} — mogą być przestery. "
+                      "Odsuń mikrofon albo zmniejsz czułość w ustawieniach Windows.")
+        else:
+            tekst = t("Nagrano z: {urzadzenie}. Poziom {db:.0f} dB — w porządku. Odtwarzam próbkę.")
+        tekst = tekst.format(db=szczyt, urzadzenie=_skroc_srodek(urzadzenie, 40))
+        self.status_var.set(tekst)
+        self.log(t("Próbka mikrofonu: {tekst}").format(tekst=tekst))
+        self._odsluchaj_probke()
+
+    def _odsluchaj_probke(self) -> None:
+        from . import speakers
+
+        p = self._probka
+        if not p["plik"] or not Path(p["plik"]).is_file():
+            return
+        try:
+            speakers.zagraj(p["plik"])
+        except Exception as exc:
+            self.status_var.set(t("Nie udało się odtworzyć próbki: {blad}").format(blad=exc))
+
+    def _usun_probke(self) -> None:
+        p = getattr(self, "_probka", None)
+        if not p or not p["plik"]:
+            return
+        try:
+            Path(p["plik"]).unlink()
+        except OSError:
+            pass
+        p["plik"] = None
+
+    def _zatrzymaj_probke(self) -> None:
+        """Program się zamyka: koniec nagrywania i odtwarzania próbki."""
+        from . import speakers
+
+        p = getattr(self, "_probka", None)
+        if not p:
+            return
+        if p["przerwij"] is not None:
+            p["przerwij"].set()
+        speakers.cisza()
+        if not self._probka_trwa():
+            self._usun_probke()
 
     def _odzyskaj_nagrania(self) -> None:
         """Po awarii: niedokończone nagrania z folderu wracają do kolejki."""
@@ -1143,6 +1670,7 @@ class App:
         self.tree.configure(yscrollcommand=theme.pasek_gdy_trzeba(
             scroll, row=1, column=1, sticky="ns", padx=(0, 4), pady=(0, 6)))
 
+        self._build_result(wrap)
         self._odswiez_pusta_kolejke()
 
     def _odswiez_pusta_kolejke(self) -> None:
@@ -1155,6 +1683,9 @@ class App:
         if pusta != self._drop_duzy:
             self._drop_duzy = pusta
             if pusta:
+                # Karta znika razem z nakładką — po dodaniu plików nie ma
+                # wracać stary komunikat.
+                self._schowaj_wynik()
                 self._karta_kolejki.grid_remove()
                 self._srodek.rowconfigure(W_DROP, weight=1)
                 self._srodek.rowconfigure(W_KOLEJKA, weight=0)
@@ -1188,26 +1719,31 @@ class App:
         panel.configure(padding=(18, 12, 18, 16))
         panel.columnconfigure(0, weight=1)
 
+        # Panel ma się mieścić w zwykłym oknie bez przewijania (autor: „nie chcę
+        # przewijania”) — stąd ciaśniejsze sekcje i etykiety obok pól, nie nad nimi.
         def sekcja(wiersz: int, tekst: str) -> None:
             ttk.Label(panel, text=tekst, style="Card.Section.TLabel").grid(
-                row=wiersz, column=0, sticky="w", pady=(16, 5))
+                row=wiersz, column=0, sticky="w", pady=(10, 4))
 
         ttk.Label(panel, text=t("Ustawienia"), style="Card.Heading.TLabel").grid(
-            row=0, column=0, sticky="w", pady=(0, 8))
+            row=0, column=0, sticky="w", pady=(0, 6))
 
         # Modelu nie wybiera się w oknie: program dobiera go sam do sprzętu,
         # a na każdym rozsądnym komputerze jest to large-v3-turbo — mniejsze
         # na procesorze nie są szybsze, a gubią słowa (pomiary w PROGRESS.md).
         # Inny model można wymusić w trybie konsolowym: --model.
-        ttk.Label(panel, text=t("Język nagrania"), style="Card.Dim.TLabel").grid(
-            row=3, column=0, sticky="w")
+        jezyk = ttk.Frame(panel, style="Card.TFrame")
+        jezyk.grid(row=3, column=0, sticky="ew")
+        jezyk.columnconfigure(1, weight=1)
+        ttk.Label(jezyk, text=t("Język nagrania"), style="Card.Dim.TLabel").grid(
+            row=0, column=0, sticky="w", padx=(0, 10))
         self.lang_var = tk.StringVar()
         # Lista pokazuje napisy w języku okna, logika porównuje kody (config).
         self.lang_box = ttk.Combobox(
-            panel, textvariable=self.lang_var,
+            jezyk, textvariable=self.lang_var,
             values=[t(label) for _c, label in LANGUAGES], state="readonly",
         )
-        self.lang_box.grid(row=4, column=0, sticky="ew", pady=(2, 0))
+        self.lang_box.grid(row=0, column=1, sticky="ew")
 
         # Formaty.
         sekcja(7, t("Zapisz jako"))
@@ -1249,18 +1785,28 @@ class App:
             command=self._toggle_diarize, style="Card.TCheckbutton",
         ).grid(row=0, column=0, sticky="w")
 
-        ttk.Label(mowcy, text=t("Ile osób:"), style="Card.TLabel").grid(
-            row=0, column=1, padx=(8, 6))
+        # Liczba osób pod polem, wcięta jak jego napis — w jednym wierszu
+        # z nim nie mieściła się w panelu i zasłaniała „powiedział”.
+        ile = ttk.Frame(mowcy, style="Card.TFrame")
+        ile.grid(row=1, column=0, sticky="w", padx=(26, 0), pady=(2, 0))
+        ttk.Label(ile, text=t("Ile osób:"), style="Card.TLabel").pack(side="left", padx=(0, 6))
         self.speakers_var = tk.StringVar(value="2")
         # Pole jest edytowalne. Stan "readonly" zostawiał działające tylko
         # strzałki: liczba wpisana z klawiatury była po cichu ignorowana
         # i program liczył dalej ze starą wartością.
         sprawdz = mowcy.register(self._tylko_liczba_osob)
         self.speakers_box = ttk.Spinbox(
-            mowcy, from_=0, to=20, width=4, textvariable=self.speakers_var,
+            ile, from_=0, to=20, width=4, textvariable=self.speakers_var,
             validate="key", validatecommand=(sprawdz, "%P"),
         )
-        self.speakers_box.grid(row=0, column=2)
+        self.speakers_box.pack(side="left")
+        if WYDANIE.nagrywanie and glosy.dostepna():
+            # Baza głosów firmy (core/glosy.py) — przy mówcach, bo to im
+            # podpowiada imiona; o dobrowolności mówi okno po kliknięciu.
+            # Było na samym dole panelu i trzeba było przewijać.
+            ttk.Button(mowcy, text=t("Dodaj mój głos do bazy…"),
+                       command=self.dodaj_moj_glos).grid(
+                row=2, column=0, sticky="w", pady=(8, 0))
 
         # Wskazówka, nie ostrzeżenie — w kolorze ostrzeżenia czytała się jak błąd.
         self.diarize_hint = tk.Label(
@@ -1268,34 +1814,27 @@ class App:
             justify="left", anchor="w", wraplength=310,
         )
         self.diarize_hint.grid(row=14, column=0, sticky="w", pady=(6, 0))
+        self.diarize_hint.grid_remove()  # pokazuje ją _toggle_diarize
 
-        # Nagrywanie spotkań: urządzenia wybiera się w karcie nagrywania
-        # („Zmień…”), tu zostaje tylko to, co dzieje się po zatrzymaniu.
+        # Nagrywanie spotkań: źródła wybiera się na karcie nagrywania, tu
+        # zostaje tylko to, co dzieje się po zatrzymaniu.
         if WYDANIE.nagrywanie:
             sekcja(15, t("Nagrywanie"))
             # Lewy kanał własnego nagrania to mikrofon użytkownika — tak
             # podpisze go transkrypcja, bez zgadywania.
-            ttk.Label(panel, text=t("Twoje imię w transkrypcji"),
-                      style="Card.Dim.TLabel").grid(row=16, column=0, sticky="w")
+            imie = ttk.Frame(panel, style="Card.TFrame")
+            imie.grid(row=16, column=0, sticky="ew")
+            imie.columnconfigure(1, weight=1)
+            ttk.Label(imie, text=t("Twoje imię w transkrypcji"),
+                      style="Card.Dim.TLabel").grid(row=0, column=0, sticky="w", padx=(0, 10))
             self.imie_var = tk.StringVar()
-            theme.pole(panel, self.imie_var, podpowiedz=t("np. Anna")).grid(
-                row=17, column=0, sticky="ew", ipady=5, pady=(2, 0))
+            theme.pole(imie, self.imie_var, podpowiedz=t("np. Anna")).grid(
+                row=0, column=1, sticky="ew", ipady=4)
             self.rec_auto_var = tk.BooleanVar(value=True)
             ttk.Checkbutton(
                 panel, text=t("Transkrybuj od razu po zatrzymaniu"),
                 variable=self.rec_auto_var, style="Card.TCheckbutton",
             ).grid(row=18, column=0, sticky="w", pady=(8, 0))
-            if glosy.dostepna():
-                # Baza głosów firmy (core/glosy.py): dobrowolny, własny głos.
-                ttk.Button(panel, text=t("Dodaj mój głos do bazy…"),
-                           command=self.dodaj_moj_glos).grid(
-                    row=19, column=0, sticky="w", pady=(12, 0))
-                tk.Label(
-                    panel, bg=BG_CARD, fg=FG_DIM, font=(theme.FONT, 9), justify="left",
-                    anchor="w", wraplength=310,
-                    text=t("Dobrowolne. Pomaga wszystkim użytkownikom {app} w firmie: "
-                           "Twoje imię pojawi się w ich transkrypcjach samo.").format(app=APP_TITLE),
-                ).grid(row=20, column=0, sticky="w", pady=(4, 0))
 
     def _build_actions(self, parent) -> None:
         """Pasek na dole: postęp po lewej, przyciski po prawej."""
@@ -1443,8 +1982,11 @@ class App:
                 text=t("Wydłuża pracę mniej więcej o długość nagrania. Dokładna "
                        "liczba osób dzieli wyraźnie lepiej niż 0 („zgadnij”)."),
             )
+            self.diarize_hint.grid()
         else:
+            # Pusta etykieta też zajmowała wiersz — panel przewijał się bez potrzeby.
             self.diarize_hint.configure(text="")
+            self.diarize_hint.grid_remove()
 
     def _pokaz_koniec_sciezki(self) -> None:
         """Długa ścieżka nie mieści się w polu — ważniejszy jest jej koniec."""
@@ -1590,7 +2132,7 @@ class App:
             )
             return
         settings.save()
-        self.baner_wynik.grid_remove()
+        self._schowaj_wynik()
 
         # Pliki, które już przeszły. Zmienione ustawienia (np. włączeni
         # mówcy) są powodem, żeby policzyć je jeszcze raz; samo dorzucenie
@@ -2009,12 +2551,22 @@ class App:
             self.status_var.set(t("Nagranie odrzucone — nic nie zostało zapisane."))
         elif kind == "nagranie_pauza":
             self._po_pauzie(bool(event[1]))
-        elif kind == "nagranie_urzadzenia":
-            self._wypelnij_urzadzenia(event[1], event[2], event[3], event[4])
         elif kind == "urzadzenia_okno":
             self._po_punktach(event[1])
         elif kind == "nagranie_odzyskane":
             self._po_odzyskaniu(event[1], event[2])
+        elif kind == "nagranie_obraz":
+            self._po_obrazie(event[1], event[2])
+        elif kind == "nagranie_okno_spotkania":
+            self._po_oknie_spotkania(bool(event[1]))
+        elif kind == "nagranie_zrodlo_obrazu":
+            self._po_zmianie_obrazu(event[1])
+        elif kind == "probka_poziom":
+            self._po_poziomie_probki(event[1])
+        elif kind == "probka_koniec":
+            self._po_probce(event[1], event[2], event[3])
+        elif kind == "obraz_dostepny":
+            self._po_sprawdzeniu_obrazu(bool(event[1]))
         elif kind == "done":
             self._on_done(event[1])
 
@@ -2173,6 +2725,11 @@ class App:
             t("Nagrywa spotkania. „Nagrywaj spotkanie” zbiera Twój mikrofon i dźwięk "
               "z głośników (np. Teams) do jednego pliku, a po zatrzymaniu od razu go "
               "transkrybuje. Najlepiej w słuchawkach."),
+            t("Na karcie nagrywania wybierasz mikrofon, urządzenie, na którym słychać "
+              "spotkanie, i obraz: sam dźwięk, okno spotkania albo cały ekran (do pliku "
+              "MKV). „Sprawdź” nagra 5 sekund z mikrofonu i od razu je odtworzy. "
+              "Słuchawki na zwykłym jacku grają przez „głośniki komputera” — Windows "
+              "ich nie odróżnia."),
         ) if WYDANIE.nagrywanie else ()
         for tekst in o_nagrywaniu + (
             t("Podpisuje, kto mówi. Włącz „Rozpoznaj, kto co powiedział” "
@@ -2196,6 +2753,82 @@ class App:
         okno.focus_set()
 
     def pokaz_licencje(self) -> None:
+        """Wydanie firmowe: okno „Licencja” (czyj to program, kto może z niego
+        korzystać, skąd aktualizacje). Publiczne: od razu licencje składników."""
+        if not WYDANIE.firma:
+            self._licencje_skladnikow()
+            return
+        if getattr(self, "_licencja", None) is not None and self._licencja.winfo_exists():
+            self._licencja.lift()
+            return
+        firma = WYDANIE.firma
+        okno = self._licencja = tk.Toplevel(self.root)
+        okno.title(t("Licencja — {app}").format(app=APP_NAME))
+        okno.configure(bg=BG)
+        okno.resizable(False, False)
+        okno.transient(self.root)
+        tresc = tk.Frame(okno, bg=BG, padx=28, pady=22)
+        tresc.pack(fill="both", expand=True)
+
+        def naglowek(tekst: str, odstep: int) -> None:
+            tk.Label(tresc, text=tekst, bg=BG, fg=FG, font=(theme.FONT_SEMI, 12),
+                     anchor="w").pack(fill="x", pady=(odstep, 8))
+
+        def akapit(tekst: str) -> tk.Frame:
+            rzad = tk.Frame(tresc, bg=BG)
+            rzad.pack(fill="x", pady=3)
+            tk.Label(rzad, text="•", bg=BG, fg=FG_FAINT, width=2, anchor="nw",
+                     font=(theme.FONT_SEMI, 10)).pack(side="left", anchor="n")
+            tk.Label(rzad, text=tekst, bg=BG, fg=FG_DIM, font=(theme.FONT, 10),
+                     justify="left", anchor="w", wraplength=440).pack(side="left", fill="x")
+            return rzad
+
+        # Sama nazwa firmy — „program firmowy” brzmiało autorowi źle.
+        naglowek(firma, 0)
+        tk.Label(tresc, text=t("{app}, wersja {w}").format(app=APP_NAME, w=__version__),
+                 bg=BG, fg=FG_FAINT, font=(theme.FONT, 9), anchor="w").pack(
+            fill="x", pady=(0, 8))
+        for tekst in (
+            t("{app} to program {firma}. Mogą z niego korzystać wszyscy pracownicy "
+              "firmy."),
+            t("Wolno go udostępniać i przekazywać dalej."),
+            t("Aktualizacje przychodzą same z folderu firmowego, gdy komputer jest "
+              "w sieci firmy. Na komputerze poza firmą program działa normalnie, "
+              "ale nie dostaje automatycznych aktualizacji."),
+            t("Nagrania i transkrypcje zostają na komputerze — program działa bez internetu."),
+        ):
+            akapit(tekst.format(app=APP_NAME, firma=firma))
+
+        if WYDANIE.kontakt_email:
+            naglowek(t("Błędy i pomysły"), 18)
+            rzad = tk.Frame(tresc, bg=BG)
+            rzad.pack(fill="x")
+            tk.Label(rzad, text=t("Opiekun programu:"), bg=BG, fg=FG_DIM,
+                     font=(theme.FONT, 10)).pack(side="left", padx=(0, 6))
+            self._link(rzad, "✉ " + (WYDANIE.osoba or WYDANIE.kontakt_email),
+                       self._napisz_do_autora).pack(side="left")
+
+        naglowek(t("Składniki open source"), 18)
+        tk.Label(tresc, text=t("Program korzysta z bibliotek open source (m.in. faster-whisper "
+                               "i FFmpeg) na ich własnych licencjach."),
+                 bg=BG, fg=FG_DIM, font=(theme.FONT, 10), justify="left", anchor="w",
+                 wraplength=460).pack(fill="x")
+
+        przyciski = tk.Frame(tresc, bg=BG)
+        przyciski.pack(fill="x", pady=(22, 0))
+        ttk.Button(przyciski, text=t("Zamknij"), style="Accent.TButton",
+                   command=okno.destroy).pack(side="right")
+        ttk.Button(przyciski, text=t("Licencje składników"),
+                   command=self._licencje_skladnikow).pack(side="right", padx=(0, 8))
+        okno.bind("<Escape>", lambda _e: okno.destroy())
+        okno.update_idletasks()
+        theme.ciemny_pasek_tytulu(okno)
+        x = self.root.winfo_rootx() + (self.root.winfo_width() - okno.winfo_reqwidth()) // 2
+        y = self.root.winfo_rooty() + 80
+        okno.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        okno.focus_set()
+
+    def _licencje_skladnikow(self) -> None:
         """Otwiera spis licencji składników — LICENCJE.txt obok programu."""
         plik = project_root() / "LICENCJE.txt"
         if not plik.is_file():
@@ -2235,6 +2868,7 @@ class App:
             self.nagrywarka.stop()
             # Plik ma zostać domknięty (nagłówek z długością) zanim znikniemy.
             self.nagrywarka.czekaj(15)
+        self._poczekaj_na_obraz()
         if self._busy():
             if not messagebox.askyesno(
                 APP_TITLE, t("Program jeszcze pracuje. Na pewno zamknąć?")
@@ -2362,11 +2996,11 @@ def run(initial_files: Optional[List[Path]] = None) -> int:
     # Windows. Ekran powitalny jest jeden — napisy bierze z t().
     teksty.ustaw_z_ustawien(Settings.load().jezyk)
     root = make_root(ukryj=True)
-    ekran = Splash(
-        root,
-        wersja=__version__,
-        podpis=t("wersja {w}  ·  {wydawca}").format(w=__version__, wydawca=WYDANIE.wydawca),
-    )
+    # Wydanie firmowe: na ekranie powitalnym sama firma, nie podpis autora
+    # (ludzie czytali go jak zastrzeżenie praw).
+    podpis = t("wersja {w}  ·  {wydawca}").format(
+        w=__version__, wydawca=WYDANIE.firma or WYDANIE.wydawca)
+    ekran = Splash(root, wersja=__version__, podpis=podpis)
     try:
         App(root, initial_files=initial_files, splash=ekran)
     finally:
