@@ -417,5 +417,30 @@ class UrzadzeniaTest(unittest.TestCase):
         self.assertEqual(N.Nagrywarka._domyslne([], wejscie=True), "")
 
 
+class WyborWTrakcieTest(unittest.TestCase):
+    """Wybór urządzenia i wyciszenie w trakcie: prośby okna dla wątku nagrywania."""
+
+    def test_zmiana_urzadzenia_tylko_w_nagraniu(self):
+        n = N.Nagrywarka()
+        n.przelacz_urzadzenie("mikrofon", "Mik B")
+        self.assertEqual(n._zmiana_urzadzen, {})  # nic się nie nagrywa — nic do zrobienia
+        n.stan = n.NAGRYWA
+        n.przelacz_urzadzenie("mikrofon", "Mik B")
+        n.przelacz_urzadzenie("system", "")
+        n.przelacz_urzadzenie("mikrofon", "Mik C")  # ostatni wybór wygrywa
+        ustawienia = {"mikrofon": "Mik A", "system": "Głośniki"}
+        self.assertEqual(sorted(n._wez_zmiany_urzadzen(ustawienia)), ["mikrofon", "system"])
+        self.assertEqual(ustawienia, {"mikrofon": "Mik C", "system": ""})
+        self.assertEqual(n._wez_zmiany_urzadzen(ustawienia), [])
+
+    def test_wyciszenie(self):
+        n = N.Nagrywarka()
+        self.assertFalse(n.wyciszony)
+        n.wycisz(True)
+        self.assertTrue(n.wyciszony)
+        n.wycisz(False)
+        self.assertFalse(n.wyciszony)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@ w swoich natywnych formatach (zwykle 48 kHz, 2 kanały, float32), tu są
 sprowadzane do 16 kHz mono (PyAV, swresample) i sumowane.
 
 Trzy rzeczy, o które trzeba zadbać — wszystkie sprawdzone w spike'u
-(PROGRESS.md, „Wydanie firmowe 1.3”):
+(dokumentacja/technika.md, „Nagrywanie spotkań”):
 
 * Loopback milczy, gdy nic nie gra: WASAPI nie dostarcza wtedy żadnych
   pakietów, więc strumień nie ma czym tykać. Lekarstwo: równoległy strumień
@@ -295,6 +295,11 @@ class ZdarzeniaNagrywania:
     okno_spotkania: Callable[[bool], None] = lambda _s: None
     #: Obraz idzie już z nowego źródła (po `Nagrywarka.przelacz_obraz`).
     zrodlo_obrazu: Callable[[object], None] = lambda _z: None
+    #: Tor nagrywa już z urządzenia wybranego w trakcie (po
+    #: `Nagrywarka.przelacz_urzadzenie`): "mikrofon" albo "system" i nazwa.
+    przepiety: Callable[[str, str], None] = lambda _t, _u: None
+    #: Mikrofon wyciszony (True) albo znów włączony (False) — po `Nagrywarka.wycisz`.
+    mikrofon: Callable[[bool], None] = lambda _w: None
 
 
 # ---------------------------------------------------------------------------
@@ -1006,6 +1011,10 @@ class Nagrywarka:
         self._skladanie: Optional[threading.Thread] = None
         #: Prośba o inne źródło obrazu w trakcie nagrania (przelacz_obraz).
         self._zmiana_obrazu: Optional[wideo.ZrodloObrazu] = None
+        #: Prośby o inne urządzenie w trakcie (przelacz_urzadzenie): tor → nazwa.
+        self._zmiana_urzadzen: dict = {}
+        #: Mikrofon wyciszony (wycisz): tor zamknięty, w lewym kanale cisza.
+        self._wyciszony = False
         #: Fragment zaczęty „Zaznacz”, jeszcze bez końca (wpis z self.znaczniki).
         self._otwarty: Optional[dict] = None
         #: Treść znacznika `.nagrywanie` (do odzyskania po awarii) — pisana
@@ -1017,7 +1026,8 @@ class Nagrywarka:
 
     def start(self, katalog: Path, mikrofon: str = "", glosniki: str = "",
               zdarzenia: Optional[ZdarzeniaNagrywania] = None,
-              zrodlo_obrazu: Optional[wideo.ZrodloObrazu] = None) -> Path:
+              zrodlo_obrazu: Optional[wideo.ZrodloObrazu] = None,
+              wyciszony: bool = False) -> Path:
         if self.stan != self.BEZCZYNNA:
             raise BladNagrywania(t("Nagrywanie już trwa."))
         if not dostepne():
@@ -1050,6 +1060,8 @@ class Nagrywarka:
         self._stan_pliku = {}
         self._zrodlo_obrazu = zrodlo_obrazu
         self._zmiana_obrazu = None
+        self._zmiana_urzadzen = {}
+        self._wyciszony = bool(wyciszony)
         self.stan = self.STARTUJE
         self._watek = threading.Thread(
             target=self._praca, args=(mikrofon, glosniki), daemon=True,
@@ -1089,6 +1101,37 @@ class Nagrywarka:
         """
         if self.stan in (self.NAGRYWA, self.PAUZA):
             self._zmiana_obrazu = zrodlo
+
+    def przelacz_urzadzenie(self, tor: str, nazwa: str) -> None:
+        """Inny mikrofon (`tor` "mikrofon") albo urządzenie spotkania ("system")
+        w trakcie nagrania. Pusta nazwa — domyślne w Windows, z podążaniem.
+
+        Tor przepina się jak przy podążaniu za domyślnym: ten sam plik, bez
+        luki. Potwierdzenie — `zdarzenia.przepiety`; gdy nowe urządzenie się
+        nie otworzy, nagranie idzie dalej ze starego (ostrzeżenie).
+        """
+        if self.stan in (self.STARTUJE, self.NAGRYWA, self.PAUZA):
+            self._zmiana_urzadzen = {**self._zmiana_urzadzen, tor: nazwa}
+
+    def wycisz(self, wyciszony: bool) -> None:
+        """Mikrofon wyciszony albo znów włączony, bez przerywania nagrania.
+
+        Wyciszony mikrofon jest zamknięty — ikona mikrofonu w zasobniku gaśnie,
+        słuchawki Bluetooth nie muszą trzymać profilu zestawu — a w lewym
+        kanale idzie cisza: oś czasu, tag i układ kanałów bez zmian. Wątek
+        roboczy potwierdza przez `zdarzenia.mikrofon`.
+        """
+        self._wyciszony = bool(wyciszony)
+
+    @property
+    def wyciszony(self) -> bool:
+        return self._wyciszony
+
+    def _wez_zmiany_urzadzen(self, ustawienia: dict) -> list:
+        """Prośby z przelacz_urzadzenie do `ustawienia`; zwraca zmienione tory."""
+        zmiany, self._zmiana_urzadzen = self._zmiana_urzadzen, {}
+        ustawienia.update(zmiany)
+        return list(zmiany)
 
     def _teraz_w_pliku(self) -> float:
         czas = self.czas_trwania
@@ -1239,11 +1282,14 @@ class Nagrywarka:
             if cichy is not None:
                 tory["system"] = _Tor(p, pa, wy.loopback_index, wy.rate,
                                       2 if wy.kanaly >= 2 else 1, teraz)
-            if mik is not None:
+            #: Wyciszenie zastosowane w tej chwili (prośba okna to self._wyciszony).
+            #: Wyciszony od startu mikrofon w ogóle się nie otwiera.
+            wyciszony = self._wyciszony
+            if mik is not None and not wyciszony:
                 tory["mikrofon"] = _Tor(p, pa, mik.index, mik.rate, min(mik.kanaly, 2), teraz)
                 if not przesuniecie[0]:
                     przesuniecie[0] = float(tory["mikrofon"].stream.get_time()) - time.perf_counter()
-            else:
+            elif mik is None:
                 zd.ostrzezenie(t("Brak mikrofonu — nagrywam sam dźwięk systemowy."))
             if zegar is None:
                 zegar = Zegar(teraz())
@@ -1257,7 +1303,9 @@ class Nagrywarka:
             self._zapisz_stan(mikrofon=mik.nazwa if mik else "", system=wy.nazwa if wy else "")
             zapis = ZapisFlac(plik, kanaly=KANALY, tagi=tagi_nagrania(plik))
             #: Na jakim urządzeniu stoi każdy tor — do podążania za domyślnym.
-            otwarte = {"mikrofon": mik.nazwa if mik else "", "system": wy.nazwa if wy else ""}
+            otwarte = {"mikrofon": mik.nazwa if mik and "mikrofon" in tory else "",
+                       "system": wy.nazwa if wy else ""}
+            #: Wybór użytkownika ("" = domyślne); zmienia go wybór w trakcie.
             ustawienia = {"mikrofon": mikrofon_nazwa, "system": glosniki_nazwa}
             self.stan = self.NAGRYWA
 
@@ -1338,8 +1386,19 @@ class Nagrywarka:
                     # Wznowienie: zegar przeskakuje o długość pauzy, tory od nowa.
                     zegar.przesuniecie += chwila - t_pauzy
                     t_pauzy = None
+                    # Wybrane w pauzie: inne urządzenie i wyciszenie — od razu
+                    # przy otwieraniu, bez otwierania dwa razy.
+                    self._wez_zmiany_urzadzen(ustawienia)
+                    if self._wyciszony != wyciszony:
+                        wyciszony = self._wyciszony
+                        if wyciszony:
+                            tory.pop("mikrofon", None)
+                        else:
+                            tory.setdefault("mikrofon", None)
+                        zd.mikrofon(wyciszony)
                     for nazwa in list(tory):
-                        nowy = self._wznow(pa, nazwa, mikrofon_nazwa, glosniki_nazwa, teraz)
+                        nowy = self._wznow(pa, nazwa, ustawienia["mikrofon"], ustawienia["system"],
+                                           teraz)
                         if nowy is None:
                             zd.ostrzezenie(t(
                                 "{kto} nie dał się otworzyć po pauzie — nagrywam dalej bez niego."
@@ -1356,10 +1415,49 @@ class Nagrywarka:
                                                zegar, osie[nazwa], tor_nowy.opoznienie)
                     self.stan = self.NAGRYWA
                     zd.pauza(False)
-                    if not tory:
+                    if not tory and not wyciszony:
                         raise BladNagrywania(t("Po pauzie nie ma z czego nagrywać."))
                     if obraz is not None:
                         obraz.ruszaj(zegar.pozycja(chwila) / RATE)
+
+                # Wybór w trakcie (okno: listy na karcie): inne urządzenie.
+                for nazwa in self._wez_zmiany_urzadzen(ustawienia):
+                    if nazwa == "mikrofon" and wyciszony:
+                        continue  # otworzy się z nowego przy włączeniu
+                    nowy = self._wznow(pa, nazwa, ustawienia["mikrofon"], ustawienia["system"],
+                                       teraz)
+                    kto = t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk spotkania")
+                    if nowy is None:
+                        zd.ostrzezenie(t("{kto}: wybrane urządzenie nie dało się otworzyć — "
+                                         "nagrywam dalej z poprzedniego.").format(kto=kto))
+                        continue
+                    cichy = self._przepnij(nazwa, nowy, tory, zrodla, osie, otwarte,
+                                           instancje, cichy, zegar)
+                    martwe.pop(nazwa, None)
+                    self._zapisz_stan(mikrofon=otwarte["mikrofon"], system=otwarte["system"])
+                    zd.przepiety(nazwa, otwarte[nazwa])
+
+                # Wyciszenie: mikrofon zamknięty, w lewym kanale cisza z osi czasu.
+                if self._wyciszony != wyciszony:
+                    wyciszony = self._wyciszony
+                    if wyciszony:
+                        tor = tory.pop("mikrofon", None)
+                        if tor is not None:
+                            tor.zamknij()
+                            zrodla["mikrofon"].przyjmij_wiele(
+                                (tp, d) for tp, d, _s in tor.zbierz())
+                            zrodla["mikrofon"].zakoncz()
+                        martwe.pop("mikrofon", None)
+                    else:
+                        nowy = self._wznow(pa, "mikrofon", ustawienia["mikrofon"],
+                                           ustawienia["system"], teraz)
+                        if nowy is None:
+                            zd.ostrzezenie(t("Mikrofon nie dał się otworzyć — w nagraniu dalej "
+                                             "cisza z Twojej strony."))
+                        else:
+                            cichy = self._przepnij("mikrofon", nowy, tory, zrodla, osie, otwarte,
+                                                   instancje, cichy, zegar)
+                    zd.mikrofon(wyciszony)
 
                 if obraz is not None:
                     obraz.dogon(pozycja_s)
@@ -1374,7 +1472,8 @@ class Nagrywarka:
                         ).format(kto=t("Mikrofon") if nazwa == "mikrofon" else t("Dźwięk systemowy")))
                     elif nazwa in martwe and chwila - martwe[nazwa] > 2.0:
                         martwe[nazwa] = chwila
-                        nowy = self._wznow(pa, nazwa, mikrofon_nazwa, glosniki_nazwa, teraz)
+                        nowy = self._wznow(pa, nazwa, ustawienia["mikrofon"],
+                                           ustawienia["system"], teraz)
                         if nowy is not None:
                             cichy = self._przepnij(nazwa, nowy, tory, zrodla, osie, otwarte,
                                                    instancje, cichy, zegar)
@@ -1417,8 +1516,8 @@ class Nagrywarka:
 
                 if chwila - ostatnie_poziomy >= 0.1:
                     ostatnie_poziomy = chwila
-                    zd.poziomy(zrodla["mikrofon"].rms_dbfs if "mikrofon" in zrodla else -120.0,
-                               zrodla["system"].rms_dbfs if "system" in zrodla else -120.0)
+                    zd.poziomy(zrodla["mikrofon"].rms_dbfs if "mikrofon" in tory else -120.0,
+                               zrodla["system"].rms_dbfs if "system" in tory else -120.0)
                 if chwila - ostatni_czas >= 1.0:
                     ostatni_czas = chwila
                     zd.czas(self.czas_trwania)
@@ -1620,3 +1719,154 @@ class Nagrywarka:
                 except Exception:
                     pass
             return None
+
+
+# ---------------------------------------------------------------------------
+# Podsłuch: paski poziomu przed nagraniem
+# ---------------------------------------------------------------------------
+
+
+class Podsluch:
+    """Paski poziomu na karcie, zanim padnie „Nagrywaj”: mikrofon i dźwięk
+    spotkania. Nic nie idzie na dysk — tylko poziom co 0,1 s.
+
+    Te same urządzenia co w nagraniu (pusta nazwa = domyślne w Windows,
+    z podążaniem co 3 s). Własny wątek-właściciel PyAudio, jak Nagrywarka.
+    Okno trzyma go tylko wtedy, gdy samo jest na wierzchu (decyzja autora
+    2026-10-27): otwarty mikrofon zapala w Windows ikonę w zasobniku,
+    a słuchawki Bluetooth przechodzą na gorszy profil zestawu (HFP). Przed
+    nagraniem i przed „Sprawdź” okno go zatrzymuje i czeka — urządzenia
+    otwiera wtedy kto inny.
+    """
+
+    def __init__(self, poziomy: Callable[[float, float], None]):
+        #: Wołane z wątku podsłuchu: (mikrofon, dźwięk spotkania) w dBFS.
+        self._poziomy = poziomy
+        self._chce: Tuple[Optional[str], Optional[str]] = (None, None)
+        self._stop = threading.Event()
+        self._watek: Optional[threading.Thread] = None
+
+    def ustaw(self, mikrofon: Optional[str], glosniki: Optional[str]) -> None:
+        """Czego słuchać: nazwa urządzenia ("" = domyślne) albo None — tego
+        toru nie otwieraj (wyciszony mikrofon). Uruchamia podsłuch, gdy stoi."""
+        self._chce = (mikrofon, glosniki)
+        watek = self._watek
+        if watek is not None and watek.is_alive() and not self._stop.is_set():
+            return
+        if watek is not None:
+            watek.join(2.0)  # poprzedni jeszcze zamyka urządzenia
+        self._stop.clear()
+        self._watek = threading.Thread(target=self._praca, daemon=True, name="podsluch")
+        self._watek.start()
+
+    def zatrzymaj(self, czekaj_s: float = 0.0) -> bool:
+        """Zamyka urządzenia. Z `czekaj_s` czeka, aż naprawdę zamknie; True — zamknięte."""
+        self._stop.set()
+        watek = self._watek
+        if watek is None or watek is threading.current_thread():
+            return True
+        if czekaj_s > 0:
+            watek.join(czekaj_s)
+        return not watek.is_alive()
+
+    @property
+    def dziala(self) -> bool:
+        return self._watek is not None and self._watek.is_alive() and not self._stop.is_set()
+
+    def _praca(self) -> None:
+        pa = _pa()
+        p = None
+        tory: dict = {}
+        otwarte_dla = None
+        otwarte = {"mikrofon": "", "system": ""}
+        poziom = {"mikrofon": -120.0, "system": -120.0}
+        #: Kiedy przyszedł ostatni pakiet: loopback w ciszy milczy, więc po
+        #: 0,3 s bez pakietów pasek spada do zera.
+        ostatni_pakiet = {"mikrofon": 0.0, "system": 0.0}
+        ostatnie_urzadzenia = ponowna_proba = 0.0
+
+        def zamknij() -> None:
+            nonlocal p
+            for tor in tory.values():
+                tor.zamknij()
+            tory.clear()
+            if p is not None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
+                p = None
+
+        def otworz(mikrofon: Optional[str], glosniki: Optional[str]) -> None:
+            nonlocal p
+            zamknij()
+            otwarte.update(mikrofon="", system="")
+            # Świeża instancja: lista urządzeń PortAudio jest zamrażana przy
+            # utworzeniu, a zestaw podłączony przed chwilą ma już być widać.
+            p = pa.PyAudio()
+            wejscia, wyjscia = _lista(p, pa)
+            # Bez cichego strumienia z nagrywania: dla paska brak pakietów
+            # to po prostu cisza, a strumień ciszy na głośnikach Realtek
+            # otwiera się 3,2 s (zmierzone 2026-10-27; loopback 0,3 s,
+            # mikrofon 0,6–1,8 s).
+            if glosniki is not None:
+                u = _znajdz(wyjscia, glosniki)
+                if u is not None and u.loopback_index is not None:
+                    try:
+                        tory["system"] = _Tor(p, pa, u.loopback_index, u.rate,
+                                              2 if u.kanaly >= 2 else 1, time.perf_counter)
+                        otwarte["system"] = u.nazwa
+                    except Exception:
+                        pass
+            if mikrofon is not None:
+                u = _znajdz(wejscia, mikrofon)
+                if u is not None:
+                    try:
+                        tory["mikrofon"] = _Tor(p, pa, u.index, u.rate, max(1, min(u.kanaly, 2)),
+                                                time.perf_counter)
+                        otwarte["mikrofon"] = u.nazwa
+                    except Exception:
+                        pass
+
+        try:
+            while not self._stop.is_set():
+                chwila = time.monotonic()
+                chce = self._chce
+                powod = chce != otwarte_dla
+                if not powod and chwila - ostatnie_urzadzenia >= CO_ILE_URZADZENIA_S:
+                    # Domyślne urządzenie Windows się zmieniło (zestaw podłączony)?
+                    ostatnie_urzadzenia = chwila
+                    punkty = Nagrywarka._punkty()
+                    for tor, ustawienie, wejscie in (("mikrofon", chce[0], True),
+                                                     ("system", chce[1], False)):
+                        if ustawienie == "" and punkty and _czy_przepiac(
+                                "", otwarte[tor], Nagrywarka._domyslne(punkty, wejscie)):
+                            powod = True
+                if not powod and chwila >= ponowna_proba:
+                    # Odłączone urządzenie albo jeszcze żadnego — spróbuj od nowa.
+                    brak = [n for n, chciane in zip(("mikrofon", "system"), chce)
+                            if chciane is not None and n not in tory]
+                    powod = bool(brak) or any(not tor.aktywny() for tor in tory.values())
+                if powod:
+                    ponowna_proba = chwila + 5.0
+                    otwarte_dla = chce
+                    try:
+                        otworz(*chce)
+                    except Exception:
+                        zamknij()
+                    poziom.update(mikrofon=-120.0, system=-120.0)
+                time.sleep(0.1)
+                chwila = time.monotonic()
+                for nazwa in ("mikrofon", "system"):
+                    tor = tory.get(nazwa)
+                    pakiety = tor.zbierz() if tor is not None else []
+                    if pakiety:
+                        ostatni_pakiet[nazwa] = chwila
+                        poziom[nazwa] = rms_dbfs(np.frombuffer(
+                            b"".join(d for _t, d, _s in pakiety), dtype=np.float32))
+                    elif chwila - ostatni_pakiet[nazwa] > 0.3:
+                        poziom[nazwa] = -120.0
+                self._poziomy(poziom["mikrofon"], poziom["system"])
+        finally:
+            zamknij()
+            self._poziomy(-120.0, -120.0)

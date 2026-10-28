@@ -1,7 +1,8 @@
 """Testy bazy głosów bez modelu: folder, pliki, dopasowanie, zbieranie odcinków.
 
 Odcisk jest tu udawany (`licz_odcisk`), więc testy nie potrzebują sherpa-onnx.
-Sprawdzenie na prawdziwym modelu i głosach SAPI: PROGRESS.md, sesja 2026-10-15.
+Sprawdzenie na prawdziwym modelu i głosach SAPI: dokumentacja/historia.md,
+sesja 2026-10-15.
 """
 
 import json

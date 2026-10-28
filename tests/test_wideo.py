@@ -124,6 +124,34 @@ class ListaTest(unittest.TestCase):
         self.assertIn("file 'O'\\''Brien.obraz-1.ts'", lista)
 
 
+class PodgladTest(unittest.TestCase):
+    """Podgląd na karcie: zmniejszenie z zachowaniem proporcji, PPM dla Tk."""
+
+    def test_zmniejsz_proporcje_i_srednia(self):
+        import numpy as np
+
+        # 1936×1048 (okno z ramką) w 320×180: szerokość pełna, wysokość z proporcji.
+        obraz = np.zeros((1048, 1936, 3), dtype=np.uint8)
+        obraz[:, ::2] = 200  # paski co piksel: średnia, nie co n-ty piksel
+        maly = W.zmniejsz(obraz, (320, 180))
+        self.assertEqual(maly.shape, (173, 320, 3))
+        self.assertEqual(maly.dtype, np.uint8)
+        self.assertTrue(80 <= int(maly.mean()) <= 120)
+
+    def test_maly_obraz_bez_powiekszania(self):
+        import numpy as np
+
+        obraz = np.full((50, 80, 3), 7, dtype=np.uint8)
+        self.assertEqual(W.zmniejsz(obraz, (320, 180)).shape, (50, 80, 3))
+
+    def test_ppm(self):
+        import numpy as np
+
+        dane = W.ppm(np.zeros((2, 3, 3), dtype=np.uint8))
+        self.assertTrue(dane.startswith(b"P6 3 2 255\n"))
+        self.assertEqual(len(dane), len(b"P6 3 2 255\n") + 18)
+
+
 @unittest.skipUnless(FFMPEG and FFPROBE, "brak ffmpeg")
 class SkladanieTest(unittest.TestCase):
     def setUp(self):

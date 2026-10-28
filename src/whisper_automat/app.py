@@ -45,6 +45,20 @@ USUN = "✕"
 #: Wybór na liście „Obraz”: okno spotkania, które program znajdzie sam
 #: przy starcie nagrania (w ustawieniach: obraz bez programu i ekranu).
 OBRAZ_AUTO = "auto"
+#: Podgląd obrazu w dymku pod listą „Obraz”: rozmiar (piksele, 16:9) i ile
+#: sekund widać go po wyborze na liście i na starcie nagrania.
+PODGLAD = (320, 180)
+PODGLAD_S = 8.0
+
+
+def _klucz_zrodla(zrodlo):
+    """Okno po uchwycie, ekran po monitorze — tytuł okna (Teams z licznikiem
+    czasu) zmienia się w trakcie, a to wciąż to samo źródło."""
+    if isinstance(zrodlo, wideo.Okno):
+        return ("okno", zrodlo.hwnd)
+    if isinstance(zrodlo, wideo.Ekran):
+        return ("ekran", zrodlo.hmonitor)
+    return zrodlo
 
 #: Wiersze lewej kolumny okna: baner nowej wersji, karta nagrywania (tylko
 #: wydania z nagrywaniem), pole upuszczania, kolejka, dziennik. Panel
@@ -752,7 +766,7 @@ class App:
         # bez luki, licznik stoi) i fragment (F8) — znacznik, który po
         # transkrypcji stoi w tekście tam, gdzie padło coś ważnego.
         gora = tk.Frame(wnetrze, bg=BG_CARD)
-        gora.grid(row=0, column=0, columnspan=3, sticky="ew")
+        gora.grid(row=0, column=0, columnspan=4, sticky="ew")
         gora.columnconfigure(2, weight=1)
         self.rec_btn = ttk.Button(gora, text=t("Nagrywaj spotkanie"),
                                   command=self.przelacz_nagrywanie)
@@ -776,10 +790,12 @@ class App:
         self.root.bind("<F8>", lambda _e: self.zaznacz_moment())
 
         tk.Frame(wnetrze, bg=theme.BORDER, height=1).grid(
-            row=1, column=0, columnspan=3, sticky="ew", pady=(12, 10))
+            row=1, column=0, columnspan=4, sticky="ew", pady=(12, 10))
 
         # Źródła: podpis, lista (styl jak „Język nagrania” w panelu), pod
-        # urządzeniami cienki wskaźnik poziomu.
+        # urządzeniami cienki wskaźnik poziomu. Od 1.6.4 listy działają też
+        # w trakcie nagrania (wybór tylko dla tego nagrania), a paski chodzą
+        # już przed nim (podsłuch, gdy okno jest na wierzchu).
         self.rec_paski = {}
         self.rec_listy = {}
         for i, (klucz, tekst, pasek) in enumerate((
@@ -796,8 +812,8 @@ class App:
             box = ttk.Combobox(wnetrze, textvariable=var, state="readonly", width=10,
                                style=f"Zrodlo{i}.TCombobox",
                                postcommand=lambda k=klucz: self._rozwin_zrodlo(k))
-            # Mikrofon ma obok „Sprawdź”, reszta sięga do prawego brzegu karty.
-            szer = 1 if klucz == "mikrofon" else 2
+            # Mikrofon ma obok „Sprawdź” i „Wycisz”, reszta sięga do prawego brzegu karty.
+            szer = 1 if klucz == "mikrofon" else 3
             box.grid(row=wiersz, column=1, columnspan=szer, sticky="ew", pady=odstep)
             box.bind("<<ComboboxSelected>>", lambda _e, k=klucz: self._po_wyborze_zrodla(k))
             # Kółko myszy nad listą zmieniałoby po cichu mikrofon albo obraz.
@@ -807,17 +823,283 @@ class App:
                 p = theme.PasekPostepu(wnetrze, maximum=1000, grubosc=3, podloze=BG_CARD)
                 p.grid(row=wiersz + 1, column=1, columnspan=szer, sticky="ew", pady=(3, 0))
                 self.rec_paski[pasek] = p
-        self.rec_sprawdz_btn = ttk.Button(wnetrze, text=t("Sprawdź"),
+        self.rec_sprawdz_btn = ttk.Button(wnetrze, text=t("Sprawdź"), width=7,
                                           command=self.sprawdz_mikrofon)
         self.rec_sprawdz_btn.grid(row=2, column=2, sticky="e", padx=(8, 0))
+        # Wyciszenie mikrofonu („jesteśmy tylko słuchaczami”): przed nagraniem
+        # i w trakcie. Wyciszony — czerwony „Wyciszony”, w lewym kanale cisza.
+        # Nie zapamiętuje się: po każdym nagraniu mikrofon wraca (decyzja autora).
+        self._wyciszony = False
+        self.rec_mik_btn = ttk.Button(wnetrze, text=t("Wycisz"), width=9,
+                                      command=self.przelacz_wyciszenie)
+        self.rec_mik_btn.grid(row=2, column=3, sticky="e", padx=(6, 0))
         # Okno ⇄ cały ekran w trakcie nagrania (udostępnianie ekranu) —
         # przy liście obrazu, widoczny tylko przy nagraniu z obrazem.
         self.rec_obraz_btn = ttk.Button(wnetrze, text=t("⇄ Cały ekran"),
                                         command=self.przelacz_obraz)
-        self.rec_obraz_btn.grid(row=6, column=2, sticky="e", padx=(8, 0), pady=(8, 0))
+        self.rec_obraz_btn.grid(row=6, column=2, columnspan=2, sticky="e", padx=(8, 0),
+                                pady=(8, 0))
         self.rec_obraz_btn.grid_remove()
+        #: W trakcie nagrania: mikrofon i urządzenie spotkania wybrane na
+        #: listach — tylko dla tego nagrania, ustawienia zostają.
+        self._wybor_w_trakcie: dict = {}
+        #: Czy bieżące nagranie ma obraz (tylko wtedy lista „Obraz” działa w trakcie).
+        self._nagranie_z_obrazem = False
+        self.podsluch = (nagrywanie.Podsluch(
+            lambda m, s: self.events.put(("podsluch_poziomy", m, s)))
+            if nagrywanie.dostepne() else None)
         self._odswiez_zrodla()
         self._odswiez_punkty()
+        self._build_podglad()
+        self._pilnuj_podsluchu()
+
+    # -- podgląd obrazu, paski przed nagraniem, wyciszenie -----------------------
+
+    def _build_podglad(self) -> None:
+        """Dymek z podglądem pod listą „Obraz”: jak teraz wygląda wybrane okno
+        albo ekran, a w trakcie nagrania — to, co się nagrywa.
+
+        Autor (2026-10-27): „brakuje mi podglądu wideo, jak się kliknie, żeby
+        się upewnić, czy to właściwe okno zaznaczone”. Dymek (nie wiersz
+        w karcie — decyzja autora po zrzutach: karta urosłaby o 100 px kosztem
+        kolejki) pokazuje się po wyborze na liście i na starcie nagrania
+        z obrazem (na `PODGLAD_S`), po najechaniu myszą na listę i znika po
+        kliknięciu. Dopóki widać — nowa klatka co 2 s (wideo.podglad, w tle).
+        """
+        szer, wys = PODGLAD
+        #: Wątek łapiący klatkę, bieżące zdjęcie Tk, źródło, do kiedy pokazywać
+        #: (monotonic), czy mysz jest nad listą, kiedy złapano ostatnią klatkę.
+        self._podglad = {"watek": None, "zdjecie": None, "zrodlo": None, "do": 0.0,
+                         "mysz": False, "klatka_t": 0.0}
+        ramka = self.rec_podglad = tk.Frame(self.root, bg=BG_CARD, padx=10, pady=10,
+                                            highlightthickness=1,
+                                            highlightbackground=theme.BORDER_DROP)
+        pudlo = tk.Frame(ramka, bg=BG_INPUT, width=szer, height=wys)
+        pudlo.grid(row=0, column=0, sticky="nw")
+        pudlo.pack_propagate(False)
+        self.rec_podglad_obraz = tk.Label(pudlo, bg=BG_INPUT, bd=0)
+        self.rec_podglad_obraz.pack(fill="both", expand=True)
+        self.rec_podglad_tytul = tk.Label(ramka, bg=BG_CARD, fg=FG, anchor="nw", justify="left",
+                                          font=(theme.FONT_SEMI, 10), wraplength=szer)
+        self.rec_podglad_tytul.grid(row=1, column=0, sticky="new", pady=(8, 0))
+        self.rec_podglad_opis = tk.Label(ramka, bg=BG_CARD, fg=FG_DIM, anchor="nw",
+                                         justify="left", font=(theme.FONT, 9), wraplength=szer)
+        self.rec_podglad_opis.grid(row=2, column=0, sticky="new", pady=(2, 0))
+        for w in (ramka, pudlo, self.rec_podglad_obraz, self.rec_podglad_tytul,
+                  self.rec_podglad_opis):
+            w.bind("<Button-1>", lambda _e: self._schowaj_podglad())
+        _var, box = self.rec_listy["obraz"]
+        box.bind("<Enter>", lambda _e: self._mysz_nad_obrazem(True), add="+")
+        box.bind("<Leave>", lambda _e: self._mysz_nad_obrazem(False), add="+")
+        self._tik_podgladu()
+
+    def _pokaz_podglad_na(self, sekundy: float = 0.0) -> None:
+        """Dymek z podglądem od razu, na `sekundy` (domyślnie PODGLAD_S)."""
+        self._podglad["do"] = time.monotonic() + (sekundy or PODGLAD_S)
+        self._odswiez_podglad(nowa_klatka=True)
+
+    def _schowaj_podglad(self) -> None:
+        self._podglad["do"] = 0.0
+        self._podglad["mysz"] = False
+        self.rec_podglad.place_forget()
+
+    def _mysz_nad_obrazem(self, nad: bool) -> None:
+        self._podglad["mysz"] = nad
+        if nad:
+            self._odswiez_podglad(nowa_klatka=True)
+
+    def _tik_podgladu(self) -> None:
+        """Co 0,5 s: chowa dymek, gdy minął czas albo mysz zeszła z listy;
+        póki widać — nowa klatka co 2 s."""
+        self.root.after(500, self._tik_podgladu)
+        p = self._podglad
+        if not self.rec_podglad.winfo_ismapped() and not (
+                p["mysz"] or time.monotonic() < p["do"]):
+            return
+        self._odswiez_podglad(nowa_klatka=time.monotonic() - p["klatka_t"] >= 2.0)
+
+    def _zrodlo_podgladu(self):
+        """(źródło do podglądu albo None, tytuł, opis) — według listy „Obraz”.
+
+        None jako całość: podglądu nie ma (sam dźwięk albo ffmpeg nie umie obrazu).
+        """
+        if self._nagrywa():
+            z = self._obraz_teraz
+            if z is None:
+                return None
+            return z, t("Nagrywa się: {zrodlo}").format(zrodlo=wideo.opis_zrodla(z)), ""
+        var, _box = self.rec_listy["obraz"]
+        wybor = self._mapy_zrodel["obraz"].get(var.get())
+        if wybor is None or self._obraz_dostepny is False:
+            return None
+        if wybor is OBRAZ_AUTO:
+            okno = next((o for o in wideo.okna() if wideo.czy_spotkanie(o)), None)
+            if okno is None:
+                return (None, t("Teraz nie widzę okna spotkania"),
+                        t("Otwórz Zoom, Teams albo Meet. Przy starcie nagrania program sam "
+                          "znajdzie okno — a jeśli go nie będzie, zapyta, co nagrywać."))
+            return okno, t("Program sam wybrał: {okno}").format(okno=wideo.opis_okna(okno)), ""
+        if isinstance(wybor, tuple):
+            return (None, t("{program} jest teraz zamknięty").format(
+                program=wideo.nazwa_programu(wybor[0])),
+                t("Okno wezmę przy starcie nagrania."))
+        return wybor, wideo.opis_zrodla(wybor), ""
+
+    def _odswiez_podglad(self, nowa_klatka: bool = False) -> None:
+        """Dymek według listy „Obraz”: pokazany albo schowany, podpis, klatka w tle."""
+        p = self._podglad
+        widac = p["mysz"] or time.monotonic() < p["do"]
+        try:
+            stan = self._zrodlo_podgladu() if widac else None
+        except Exception:
+            stan = None
+        if stan is None:
+            self.rec_podglad.place_forget()
+            p["zrodlo"] = None
+            return
+        zrodlo, tytul, opis = stan
+        _var, box = self.rec_listy["obraz"]
+        # Pod listą, wyrównany do jej prawego brzegu — nad kolejką, nie w karcie.
+        self.rec_podglad.place(in_=box, relx=1.0, rely=1.0, y=8, anchor="ne")
+        self.rec_podglad.lift()
+        self.rec_podglad_tytul.configure(text=tytul)
+        if zrodlo is None:
+            self._pokaz_klatke(None)
+            self.rec_podglad_opis.configure(text=opis)
+            p["zrodlo"] = None
+            return
+        if _klucz_zrodla(zrodlo) != _klucz_zrodla(p["zrodlo"]):
+            self._pokaz_klatke(None)
+            self.rec_podglad_opis.configure(text=t("Łapię obraz…"))
+            nowa_klatka = True
+            p["klatka_t"] = 0.0  # łapanie poprzedniego jeszcze trwa? Następny tik złapie nowe.
+        p["zrodlo"] = zrodlo
+        watek = p["watek"]
+        if not nowa_klatka or (watek is not None and watek.is_alive()):
+            return
+        p["klatka_t"] = time.monotonic()
+        put = self.events.put
+
+        def praca() -> None:
+            try:
+                klatka = wideo.podglad(zrodlo, PODGLAD)
+            except Exception:
+                klatka = None
+            put(("podglad", zrodlo, klatka))
+
+        p["watek"] = threading.Thread(target=praca, daemon=True, name="podglad")
+        p["watek"].start()
+
+    def _po_klatce(self, zrodlo, klatka: Optional[bytes]) -> None:
+        if _klucz_zrodla(zrodlo) != _klucz_zrodla(self._podglad["zrodlo"]):
+            return  # przyszła klatka poprzedniego wyboru
+        self._pokaz_klatke(klatka)
+        if klatka is not None:
+            tekst = (t("Tak wygląda teraz nagrywany obraz. Podgląd pokazuje się też po "
+                       "najechaniu myszą na listę „Obraz”; kliknięcie go chowa.")
+                     if self._nagrywa() else
+                     t("Tak wygląda teraz to źródło. Podgląd pokazuje się też po najechaniu "
+                       "myszą na listę „Obraz”; kliknięcie go chowa."))
+        elif isinstance(zrodlo, wideo.Okno) and wideo.okno_istnieje(zrodlo.hwnd):
+            tekst = t("Okno jest zminimalizowane — przywróć je, inaczej obraz w nagraniu "
+                      "będzie stał.")
+        else:
+            tekst = t("Tego okna już nie ma — wybierz inne z listy.")
+        self.rec_podglad_opis.configure(text=tekst)
+
+    def _pokaz_klatke(self, klatka: Optional[bytes]) -> None:
+        if klatka is None:
+            self._podglad["zdjecie"] = None
+            self.rec_podglad_obraz.configure(image="")
+            return
+        try:
+            zdjecie = tk.PhotoImage(data=klatka)
+        except tk.TclError:
+            return
+        self._podglad["zdjecie"] = zdjecie  # Tk nie trzyma odwołania sam
+        self.rec_podglad_obraz.configure(image=zdjecie)
+
+    def _na_wierzchu(self) -> bool:
+        """Czy główne okno programu jest teraz na pierwszym planie — tylko wtedy
+        działa podsłuch. Każde okienko (głos do bazy, „Kto jest kim?”, pytanie)
+        go wyłącza: okno głosu nagrywa przez własną Nagrywarkę, a dwa wątki
+        z PyAudio naraz na tych samych urządzeniach to proszenie się o kłopot."""
+        try:
+            if self.root.state() in ("iconic", "withdrawn"):
+                return False
+            glowne = int(self.root.wm_frame(), 16)
+        except (tk.TclError, ValueError):
+            return False
+        if os.name != "nt":
+            return True
+        import ctypes
+
+        u32 = ctypes.WinDLL("user32")  # własna kopia: typ wyniku nie przecieka dalej
+        u32.GetForegroundWindow.restype = ctypes.c_void_p
+        return (u32.GetForegroundWindow() or 0) == glowne
+
+    def _pilnuj_podsluchu(self) -> None:
+        """Paski przed nagraniem. Mikrofon otwarty bez potrzeby zapala ikonę
+        w zasobniku i psuje dźwięk w słuchawkach Bluetooth, więc podsłuch działa
+        tylko przy oknie na wierzchu, bez nagrania i bez „Sprawdź”."""
+        self.root.after(300, self._pilnuj_podsluchu)
+        if self.podsluch is None:
+            return
+        if not self._nagrywa() and not self._probka_trwa() and self._na_wierzchu():
+            s = self.settings
+            self.podsluch.ustaw(None if self._wyciszony else s.nagranie_mikrofon,
+                                s.nagranie_glosniki)
+        elif self.podsluch.dziala:
+            self.podsluch.zatrzymaj()
+            if not self._nagrywa() and not self._probka_trwa():
+                for pasek in self.rec_paski.values():
+                    pasek["value"] = 0
+
+    def _zatrzymaj_podsluch(self) -> None:
+        """Przed nagraniem i „Sprawdź”: urządzenia mają być wolne."""
+        if self.podsluch is not None:
+            self.podsluch.zatrzymaj(czekaj_s=2.0)
+
+    def _po_podsluchu(self, mik: float, system: float) -> None:
+        if self._nagrywa() or self._probka_trwa():
+            return
+        self._ustaw_paski(-120.0 if self._wyciszony else mik, system)
+
+    def _ustaw_paski(self, mik: float, system: float) -> None:
+        for klucz, dbfs in (("mikrofon", mik), ("system", system)):
+            self.rec_paski[klucz]["value"] = max(0.0, min(1.0, (dbfs + 60.0) / 60.0)) * 1000
+
+    def przelacz_wyciszenie(self) -> None:
+        """„Wycisz” przy mikrofonie: przed nagraniem i w trakcie."""
+        self._wyciszony = not self._wyciszony
+        if self._nagrywa():
+            self.nagrywarka.wycisz(self._wyciszony)
+        self._ustaw_przycisk_mikrofonu()
+        if self._wyciszony:
+            self.rec_paski["mikrofon"]["value"] = 0
+            tekst = (t("Mikrofon wyciszony — w nagraniu jest teraz tylko dźwięk spotkania.")
+                     if self._nagrywa() else
+                     t("Mikrofon wyciszony — nagranie pójdzie bez Ciebie, sam dźwięk spotkania. "
+                       "Po nagraniu mikrofon wróci."))
+        else:
+            tekst = (t("Mikrofon włączony — znów nagrywa się Twój głos.") if self._nagrywa()
+                     else t("Mikrofon włączony."))
+        self.status_var.set(tekst)
+
+    def _ustaw_przycisk_mikrofonu(self) -> None:
+        """Wyciszony — czerwony „Wyciszony” (widać z daleka); włączony — „Wycisz”."""
+        if self._wyciszony:
+            self.rec_mik_btn.configure(text=t("Wyciszony"), style="Stop.TButton")
+        else:
+            self.rec_mik_btn.configure(text=t("Wycisz"), style="TButton")
+
+    def _po_wyciszeniu(self, wyciszony: bool) -> None:
+        """Wątek nagrywania potwierdził wyciszenie albo włączenie mikrofonu."""
+        if not self._nagrywa():
+            return
+        czas = _hms(self.nagrywarka.czas_trwania)
+        self.log(t("Mikrofon wyciszony ({czas}).").format(czas=czas) if wyciszony
+                 else t("Mikrofon włączony ({czas}).").format(czas=czas))
 
     def _nagrywa(self) -> bool:
         nagrywarka = getattr(self, "nagrywarka", None)
@@ -826,20 +1108,22 @@ class App:
     def _odswiez_zrodla(self) -> None:
         """Listy źródeł na karcie: wpisy i to, co wybrane.
 
-        Poza nagraniem — ustawienia, w trakcie — to, z czego obraz idzie
-        naprawdę (mógł zostać przełączony na cały ekran i z powrotem).
+        Poza nagraniem — ustawienia, w trakcie — to, z czego nagranie idzie
+        naprawdę (wybór w trakcie, obraz przełączony na cały ekran i z
+        powrotem). Od 1.6.4 listy działają też w trakcie; „Obraz” tylko
+        w nagraniu z obrazem — obrazu nie da się dołączyć w połowie.
         """
         self._wypelnij_urzadzenie("mikrofon")
         self._wypelnij_urzadzenie("glosniki")
         nagrywa = self._nagrywa()
         if nagrywa:
-            var, _box = self.rec_listy["obraz"]
-            var.set(wideo.opis_zrodla(self._obraz_teraz) if self._obraz_teraz is not None
-                    else t("Sam dźwięk — bez obrazu"))
+            self._wypelnij_obraz_w_trakcie(wideo.okna() if self._nagranie_z_obrazem else [],
+                                           wideo.ekrany() if self._nagranie_z_obrazem else [])
         else:
             self._wypelnij_obraz(wideo.okna(), wideo.ekrany())
         for klucz, (_var, box) in self.rec_listy.items():
-            wylaczona = nagrywa or (klucz == "obraz" and self._obraz_dostepny is False)
+            wylaczona = klucz == "obraz" and (
+                self._obraz_dostepny is False or (nagrywa and not self._nagranie_z_obrazem))
             box.configure(state="disabled" if wylaczona else "readonly")
 
     def _wypelnij_urzadzenie(self, klucz: str) -> None:
@@ -851,6 +1135,8 @@ class App:
         var, box = self.rec_listy[klucz]
         wejscie = klucz == "mikrofon"
         zapisane = getattr(self.settings, f"nagranie_{klucz}")
+        if self._nagrywa():
+            zapisane = self._wybor_w_trakcie.get(klucz, zapisane)
         mapa = self._mapy_zrodel[klucz]
         mapa.clear()
         domyslne = urzadzenia.znajdz(self._punkty, "", wejscie)
@@ -926,10 +1212,47 @@ class App:
         box.configure(values=wpisy)
         var.set(wybrany)
 
+    def _wypelnij_obraz_w_trakcie(self, okna, ekrany) -> None:
+        """W trakcie nagrania z obrazem: okna i ekrany, na które da się przełączyć.
+
+        Bez „Sam dźwięk” i „samo znajdzie” — obrazu nie da się w połowie
+        wyłączyć ani zgadywać od nowa. Wybrane: to, co nagrywa się teraz.
+        """
+        var, box = self.rec_listy["obraz"]
+        mapa = self._mapy_zrodel["obraz"]
+        mapa.clear()
+        teraz = self._obraz_teraz
+        if not self._nagranie_z_obrazem:
+            sam = t("Sam dźwięk — bez obrazu")
+            mapa[sam] = None
+            box.configure(values=[sam])
+            var.set(sam)
+            return
+        wpisy, wybrany = [], ""
+        for zrodlo in list(ekrany) + list(okna):
+            wpis = (wideo.opis_ekranu(zrodlo, len(ekrany)) if isinstance(zrodlo, wideo.Ekran)
+                    else wideo.opis_okna(zrodlo))
+            while wpis in mapa:
+                wpis += " "
+            mapa[wpis] = zrodlo
+            wpisy.append(wpis)
+            if teraz is not None and _klucz_zrodla(zrodlo) == _klucz_zrodla(teraz):
+                wybrany = wpis
+        if not wybrany:
+            # Nagrywane okno zamknięte albo spoza listy — zostaje na górze.
+            wybrany = (wideo.opis_zrodla(teraz) if teraz is not None
+                       else t("Okna spotkania już nie ma — wybierz inne"))
+            mapa[wybrany] = teraz
+            wpisy.insert(0, wybrany)
+        box.configure(values=wpisy)
+        var.set(wybrany)
+
     def _rozwin_zrodlo(self, klucz: str) -> None:
         """Lista się rozwija: świeże urządzenia albo okna (zestaw podłączony
         przed chwilą ma już na niej być) i szerokość na najdłuższy wpis."""
-        if klucz == "obraz":
+        if klucz == "obraz" and self._nagrywa():
+            self._wypelnij_obraz_w_trakcie(wideo.okna(), wideo.ekrany())
+        elif klucz == "obraz":
             self._wypelnij_obraz(wideo.okna(), wideo.ekrany())
         else:
             punkty = urzadzenia.punkty()
@@ -957,6 +1280,9 @@ class App:
         if var.get() not in mapa:
             return
         wybor = mapa[var.get()]
+        if self._nagrywa():
+            self._zmien_w_trakcie(klucz, wybor)
+            return
         s = self.settings
         podpowiedz = ""
         if klucz != "obraz":
@@ -984,8 +1310,35 @@ class App:
         if klucz == "obraz" and s.nagranie_obraz:
             self._rozgrzej_obraz()
         self._odswiez_zrodla()
+        if klucz == "obraz":
+            self._pokaz_podglad_na()
         if podpowiedz and not self._busy():
             self.status_var.set(podpowiedz)
+
+    def _zmien_w_trakcie(self, klucz: str, wybor) -> None:
+        """Wybór na liście w trakcie nagrania — tylko dla tego nagrania,
+        ustawienia zostają (następne nagranie zacznie się jak dotąd)."""
+        if klucz == "obraz":
+            if (isinstance(wybor, (wideo.Okno, wideo.Ekran))
+                    and _klucz_zrodla(wybor) != _klucz_zrodla(self._obraz_teraz)):
+                self._na_zrodlo(wybor)
+            self._odswiez_zrodla()
+            return
+        if wybor == self._wybor_w_trakcie.get(klucz):
+            return
+        self._wybor_w_trakcie[klucz] = wybor
+        self.nagrywarka.przelacz_urzadzenie("mikrofon" if klucz == "mikrofon" else "system", wybor)
+        self.status_var.set(t("Przełączam mikrofon…") if klucz == "mikrofon"
+                            else t("Przełączam dźwięk spotkania…"))
+        self._odswiez_zrodla()
+
+    def _po_przepieciu(self, tor: str, urzadzenie: str) -> None:
+        """Wątek nagrywania potwierdził: tor idzie z urządzenia wybranego w trakcie."""
+        tekst = (t("Mikrofon przełączony na: {urzadzenie}") if tor == "mikrofon"
+                 else t("Dźwięk spotkania przełączony na: {urzadzenie}")).format(
+            urzadzenie=urzadzenie)
+        self.log(tekst)
+        self.status_var.set(tekst)
 
     def _opis_zrodla(self, nazwa: str, wejscie: bool) -> str:
         p = urzadzenia.znajdz(self._punkty, nazwa, wejscie)
@@ -1037,6 +1390,8 @@ class App:
         zrodlo = self._zrodlo_obrazu(settings)
         if zrodlo is False:
             return
+        # Urządzenia mają być wolne, zanim otworzy je nagrywanie.
+        self._zatrzymaj_podsluch()
         put = self.events.put
         zdarzenia = nagrywanie.ZdarzeniaNagrywania(
             poziomy=lambda m, s: put(("nagranie_poziomy", m, s)),
@@ -1050,11 +1405,14 @@ class App:
             obraz=lambda p, b: put(("nagranie_obraz", str(p) if p else "", b)),
             okno_spotkania=lambda s: put(("nagranie_okno_spotkania", s)),
             zrodlo_obrazu=lambda z: put(("nagranie_zrodlo_obrazu", z)),
+            przepiety=lambda tor, u: put(("nagranie_przepiety", tor, u)),
+            mikrofon=lambda w: put(("nagranie_mikrofon", w)),
         )
         try:
             plik = self.nagrywarka.start(
                 self._katalog_nagran(), settings.nagranie_mikrofon,
-                settings.nagranie_glosniki, zdarzenia, zrodlo_obrazu=zrodlo)
+                settings.nagranie_glosniki, zdarzenia, zrodlo_obrazu=zrodlo,
+                wyciszony=self._wyciszony)
         except nagrywanie.BladNagrywania as exc:
             messagebox.showerror(APP_TITLE, str(exc), parent=self.root)
             return
@@ -1062,13 +1420,21 @@ class App:
         self._nagranie_sys_cicho_od = None
         self._nagranie_podpowiedziano = False
         self._obraz_teraz = zrodlo
+        self._nagranie_z_obrazem = zrodlo is not None
+        self._wybor_w_trakcie = {"mikrofon": settings.nagranie_mikrofon,
+                                 "glosniki": settings.nagranie_glosniki}
         self._okno_nagrania = zrodlo if isinstance(zrodlo, wideo.Okno) else None
         self._okno_schowane = None
         self._ustaw_stan_nagrywania(True)
         self.log(t("Nagrywam spotkanie: {plik}").format(plik=plik.name))
         if zrodlo is not None:
             self.log(t("Nagrywam też obraz: {zrodlo}").format(zrodlo=wideo.opis_zrodla(zrodlo)))
-        self.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
+        if self._wyciszony:
+            self.log(t("Mikrofon wyciszony od początku — nagrywa się sam dźwięk spotkania."))
+            self.status_var.set(t("Nagrywam z wyciszonym mikrofonem — Twojego głosu nie będzie. "
+                                  "„Wyciszony” włącza mikrofon."))
+        else:
+            self.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
 
     def zatrzymaj_nagrywanie(self) -> None:
         self.rec_btn.configure(state="disabled", text=t("Zapisuję…"))
@@ -1140,10 +1506,11 @@ class App:
             self.rec_czas.configure(fg=FG)
             self.start_btn.configure(state="disabled")
             self._migaj_kropka()
-            # Listy źródeł stoją (wybór działa od następnego nagrania), lista
-            # obrazu pokazuje, co nagrywa się teraz; obok — „⇄ Cały ekran”.
+            # Listy pokazują, z czego nagranie idzie teraz, i dają się zmienić
+            # (tylko dla tego nagrania); obok obrazu — „⇄ Cały ekran”.
             self._odswiez_zrodla()
             self._ustaw_przycisk_obrazu()
+            self._pokaz_podglad_na()
         else:
             self.rec_btn.configure(text=t("Nagrywaj spotkanie"), style="TButton", state="normal")
             self.rec_pauza_btn.configure(state="disabled", text=t("Pauza"))
@@ -1158,8 +1525,17 @@ class App:
                 self.start_btn.configure(state="normal")
             self._zamknij_dymek()
             self._obraz_teraz = self._okno_nagrania = self._okno_schowane = None
+            self._nagranie_z_obrazem = False
+            self._wybor_w_trakcie = {}
+            if self._wyciszony:
+                # Wyciszenie się nie zapamiętuje (decyzja autora 2026-10-27):
+                # następne nagranie zaczyna się z mikrofonem.
+                self._wyciszony = False
+                self._ustaw_przycisk_mikrofonu()
+                self.log(t("Mikrofon znów włączony — następne nagranie zacznie się z nim."))
             self._ustaw_przycisk_obrazu()
             self._odswiez_zrodla()
+            self._schowaj_podglad()
 
     def _migaj_kropka(self) -> None:
         if not self._nagrywa():
@@ -1264,7 +1640,7 @@ class App:
         _var, lista = self.rec_listy["obraz"]
         if z is None or not self._nagrywa():
             self.rec_obraz_btn.grid_remove()
-            lista.grid_configure(columnspan=2)
+            lista.grid_configure(columnspan=3)
         else:
             self.rec_obraz_btn.configure(
                 state="normal",
@@ -1329,6 +1705,7 @@ class App:
             self._okno_nagrania = zrodlo
         self._ustaw_przycisk_obrazu()
         self._odswiez_zrodla()
+        self._pokaz_podglad_na()
         tekst = t("Obraz przełączony na: {zrodlo}").format(zrodlo=wideo.opis_zrodla(zrodlo))
         self.log(tekst)
         self.status_var.set(tekst)
@@ -1490,6 +1867,7 @@ class App:
         from . import speakers
 
         speakers.cisza()
+        self._zatrzymaj_podsluch()
         p = self._probka
         self._usun_probke()
         uchwyt, sciezka = tempfile.mkstemp(prefix="probka-mikrofonu-", suffix=".wav")
@@ -1730,8 +2108,9 @@ class App:
 
         # Modelu nie wybiera się w oknie: program dobiera go sam do sprzętu,
         # a na każdym rozsądnym komputerze jest to large-v3-turbo — mniejsze
-        # na procesorze nie są szybsze, a gubią słowa (pomiary w PROGRESS.md).
-        # Inny model można wymusić w trybie konsolowym: --model.
+        # na procesorze nie są szybsze, a gubią słowa (pomiary
+        # w dokumentacja/technika.md). Inny model można wymusić w trybie
+        # konsolowym: --model.
         jezyk = ttk.Frame(panel, style="Card.TFrame")
         jezyk.grid(row=3, column=0, sticky="ew")
         jezyk.columnconfigure(1, weight=1)
@@ -2561,6 +2940,14 @@ class App:
             self._po_oknie_spotkania(bool(event[1]))
         elif kind == "nagranie_zrodlo_obrazu":
             self._po_zmianie_obrazu(event[1])
+        elif kind == "nagranie_przepiety":
+            self._po_przepieciu(event[1], event[2])
+        elif kind == "nagranie_mikrofon":
+            self._po_wyciszeniu(bool(event[1]))
+        elif kind == "podsluch_poziomy":
+            self._po_podsluchu(event[1], event[2])
+        elif kind == "podglad":
+            self._po_klatce(event[1], event[2])
         elif kind == "probka_poziom":
             self._po_poziomie_probki(event[1])
         elif kind == "probka_koniec":
@@ -2727,9 +3114,10 @@ class App:
               "transkrybuje. Najlepiej w słuchawkach."),
             t("Na karcie nagrywania wybierasz mikrofon, urządzenie, na którym słychać "
               "spotkanie, i obraz: sam dźwięk, okno spotkania albo cały ekran (do pliku "
-              "MKV). „Sprawdź” nagra 5 sekund z mikrofonu i od razu je odtworzy. "
-              "Słuchawki na zwykłym jacku grają przez „głośniki komputera” — Windows "
-              "ich nie odróżnia."),
+              "MKV) — także w trakcie nagrania. „Sprawdź” nagra 5 sekund z mikrofonu "
+              "i od razu je odtworzy, a „Wycisz” nagrywa samych rozmówców, gdy jesteś "
+              "tylko słuchaczem. Słuchawki na zwykłym jacku grają przez „głośniki "
+              "komputera” — Windows ich nie odróżnia."),
         ) if WYDANIE.nagrywanie else ()
         for tekst in o_nagrywaniu + (
             t("Podpisuje, kto mówi. Włącz „Rozpoznaj, kto co powiedział” "
@@ -2878,6 +3266,8 @@ class App:
         self._zamknij()
 
     def _zamknij(self) -> None:
+        if getattr(self, "podsluch", None) is not None:
+            self.podsluch.zatrzymaj(czekaj_s=1.0)
         try:
             settings = self._collect_settings()
             settings.window_geometry = self.root.geometry()

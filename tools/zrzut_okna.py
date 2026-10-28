@@ -11,7 +11,8 @@ nagrywanie, zrodla (karta nagrywania na udawanych urządzeniach i oknach), glos,
 wynik, dymek (pytanie przy udostępnianiu ekranu), dymek-okno (po nim),
 strona (kolejka + zrodla, neutralny folder wyników i imię — zrzut na stronę).
 Zmienne: WHISPER_AUTOMAT_WYDANIE=firma|papuga (domyślnie papuga), ZRZUT_EKRAN=1
-(w trybie zrodla wybrany „Cały ekran” zamiast okna Zoom),
+(w trybie zrodla wybrany „Cały ekran” zamiast okna Zoom), ZRZUT_WYCISZONY=1
+(mikrofon wyciszony w trybach zrodla i nagrywanie),
 WHISPER_AUTOMAT_JEZYK=pl|en (język okna; domyślnie język Windows),
 ZRZUT_GEOM=980x660 (rozmiar okna).
 
@@ -49,6 +50,31 @@ from whisper_automat.teksty import t  # noqa: E402
 
 A.App._pobierz_przy_starcie = lambda self: None
 update.pora_sprawdzic = lambda *a, **k: False
+# Bez prawdziwych urządzeń: podsłuch nie otwiera mikrofonu, a podgląd obrazu
+# to udawane spotkanie, nie okno z komputera, na którym robi się zrzut.
+A.nagrywanie.Podsluch = lambda *a, **k: None
+A.App._na_wierzchu = lambda self: True
+
+
+def _udawane_spotkanie(_zrodlo, maks):
+    """Cztery kafelki rozmowy wideo z „twarzami” — zamiast prawdziwego okna."""
+    import numpy as np
+
+    szer, wys = maks
+    obraz = np.zeros((wys, szer, 3), dtype=np.uint8)
+    obraz[:] = (27, 29, 34)
+    yy, xx = np.mgrid[0:wys, 0:szer]
+    for i, kolor in enumerate([(58, 74, 99), (74, 63, 92), (47, 85, 70), (90, 70, 54)]):
+        x0, y0 = 4 + (i % 2) * (szer // 2), 4 + (i // 2) * ((wys - 10) // 2)
+        x1, y1 = x0 + szer // 2 - 8, y0 + (wys - 10) // 2 - 4
+        obraz[y0:y1, x0:x1] = kolor
+        cx, cy, r = (x0 + x1) // 2, (y0 + y1) // 2, (y1 - y0) // 4
+        obraz[(xx - cx) ** 2 + (yy - cy) ** 2 < r * r] = [min(255, c + 60) for c in kolor]
+    obraz[wys - 6:, :] = (40, 44, 52)
+    return A.wideo.ppm(obraz)
+
+
+A.wideo.podglad = _udawane_spotkanie
 
 root = A.make_root()
 aplikacja = A.App(root)
@@ -117,6 +143,8 @@ def przygotuj():
     if tryb == "mowcy":
         aplikacja.diarize_var.set(True)
         aplikacja._toggle_diarize()
+    if tryb in ("zrodla", "strona", "nagrywanie"):
+        udawane_zrodla()
     if tryb == "nagrywanie":
         # Karta nagrywania w stanie „nagrywam” (tylko wydanie z nagrywaniem),
         # bez otwierania urządzeń: udawany czas i poziomy.
@@ -128,16 +156,22 @@ def przygotuj():
         aplikacja.rec_pauza_btn.configure(state="normal")
         aplikacja.rec_znacznik_btn.configure(state="normal")
         aplikacja.start_btn.configure(state="disabled")
-        # Jak w trakcie nagrania okna Zoom: listy zablokowane, lista obrazu
-        # pokazuje okno, obok „⇄ Cały ekran”.
+        # Jak w trakcie nagrania okna Zoom: listy pokazują, z czego idzie
+        # nagranie (i dają się zmienić), lista obrazu — okno, obok „⇄ Cały ekran”.
         from whisper_automat.core import wideo as W
 
         aplikacja._nagrywa = lambda: True
-        aplikacja._obraz_teraz = W.Okno(101, "Spotkanie Zoom", "Zoom.exe", 1600, 900)
+        aplikacja._obraz_teraz = W.okna()[0]
+        aplikacja._nagranie_z_obrazem = True
+        s = aplikacja.settings
+        aplikacja._wybor_w_trakcie = {"mikrofon": s.nagranie_mikrofon,
+                                      "glosniki": s.nagranie_glosniki}
         aplikacja.rec_sprawdz_btn.configure(state="disabled")
         aplikacja._odswiez_zrodla()
         aplikacja._ustaw_przycisk_obrazu()
         aplikacja.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
+        if os.environ.get("ZRZUT_WYCISZONY"):
+            aplikacja.rec_paski["mikrofon"]["value"] = 0
     if tryb in ("dymek", "dymek-okno"):
         # Dymek przy udostępnianiu ekranu (dwa udawane monitory) albo po nim.
         from whisper_automat.core import wideo as W
@@ -148,52 +182,61 @@ def przygotuj():
             aplikacja._dymek_caly_ekran()
         else:
             aplikacja._dymek_okno()
-    if tryb in ("zrodla", "strona"):
-        # Karta nagrywania na udawanych urządzeniach i oknach: laptop
-        # z monitorem po HDMI i zestawem USB, otwarte Zoom i Teams — na
-        # zrzucie nie ma nazw z komputera, na którym się go robi.
-        from whisper_automat.core import urzadzenia as U
-        from whisper_automat.core import wideo as W
-
-        punkty = [
-            U.PunktAudio("Głośniki (Realtek(R) Audio)", False, U.GLOSNIKI, U.WBUDOWANE,
-                         domyslne=True, id="g1"),
-            U.PunktAudio("BenQ G2420HDB (HD Audio Driver for Display Audio)", False, U.MONITOR,
-                         U.WBUDOWANE, komunikacyjne=True, id="g2"),
-            U.PunktAudio("Zestaw słuchawkowy (Poly Blackwire 3320 Series)", False, U.ZESTAW,
-                         U.USB, id="g3"),
-            U.PunktAudio("Zestaw mikrofonów (Technologia Intel® Smart Sound dla mikrofonów "
-                         "cyfrowych)", True, U.MIKROFON, U.WBUDOWANE, domyslne=True,
-                         komunikacyjne=True, id="m1"),
-            U.PunktAudio("Mikrofon zestawu słuchawkowego (Poly Blackwire 3320 Series)", True,
-                         U.ZESTAW, U.USB, id="m2"),
-        ]
-        okna = [W.Okno(101, "Spotkanie Zoom", "Zoom.exe", 1600, 900),
-                W.Okno(102, "Przegląd projektu | Microsoft Teams", "ms-teams.exe", 1400, 900),
-                W.Okno(103, "Czat | Microsoft Teams", "ms-teams.exe", 1400, 900),
-                W.Okno(104, "Notatki — Notatnik", "notepad.exe", 900, 700,
-                       zminimalizowane=True)]
-        U.punkty = lambda: punkty
-        W.okna = lambda: okna
-        W.ekrany = lambda: [W.Ekran(201, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True),
-                            W.Ekran(202, "\\\\.\\DISPLAY2", 2, 1920, 1080, nazwa="BenQ G2420HDB")]
-        aplikacja._punkty = punkty
-        aplikacja._obraz_dostepny = True
-        s = aplikacja.settings
-        s.nagranie_mikrofon = punkty[4].nazwa
-        s.nagranie_glosniki = punkty[2].nazwa
-        s.nagranie_obraz = True
-        if os.environ.get("ZRZUT_EKRAN"):
-            s.nagranie_ekran = "\\\\.\\DISPLAY1"
-        else:
-            s.nagranie_okno_program = "Zoom.exe"
-            s.nagranie_okno_tytul = "Spotkanie Zoom"
-        aplikacja._odswiez_zrodla()
+    if tryb in ("zrodla", "strona", "nagrywanie"):
+        if os.environ.get("ZRZUT_WYCISZONY"):
+            aplikacja._wyciszony = True
+            aplikacja._ustaw_przycisk_mikrofonu()
+        if tryb != "strona":
+            aplikacja._pokaz_podglad_na(60)
     if tryb == "strona":
         # Bez ścieżek i nazwy konta z komputera, na którym robi się zrzut.
         aplikacja.outdir_var.set(r"C:\Users\Anna\Documents\Transkrypcje")
         aplikacja.imie_var.set("Anna")
         aplikacja.rec_auto_var.set(True)
+
+
+def udawane_zrodla():
+    """Karta nagrywania na udawanych urządzeniach i oknach: laptop z monitorem
+    po HDMI i zestawem USB, otwarte Zoom i Teams — na zrzucie nie ma nazw
+    z komputera, na którym się go robi."""
+    from whisper_automat.core import urzadzenia as U
+    from whisper_automat.core import wideo as W
+
+    punkty = [
+        U.PunktAudio("Głośniki (Realtek(R) Audio)", False, U.GLOSNIKI, U.WBUDOWANE,
+                     domyslne=True, id="g1"),
+        U.PunktAudio("BenQ G2420HDB (HD Audio Driver for Display Audio)", False, U.MONITOR,
+                     U.WBUDOWANE, komunikacyjne=True, id="g2"),
+        U.PunktAudio("Zestaw słuchawkowy (Poly Blackwire 3320 Series)", False, U.ZESTAW,
+                     U.USB, id="g3"),
+        U.PunktAudio("Zestaw mikrofonów (Technologia Intel® Smart Sound dla mikrofonów "
+                     "cyfrowych)", True, U.MIKROFON, U.WBUDOWANE, domyslne=True,
+                     komunikacyjne=True, id="m1"),
+        U.PunktAudio("Mikrofon zestawu słuchawkowego (Poly Blackwire 3320 Series)", True,
+                     U.ZESTAW, U.USB, id="m2"),
+    ]
+    okna = [W.Okno(101, "Spotkanie Zoom", "Zoom.exe", 1600, 900),
+            W.Okno(102, "Przegląd projektu | Microsoft Teams", "ms-teams.exe", 1400, 900),
+            W.Okno(103, "Czat | Microsoft Teams", "ms-teams.exe", 1400, 900),
+            W.Okno(104, "Notatki — Notatnik", "notepad.exe", 900, 700,
+                   zminimalizowane=True)]
+    U.punkty = lambda: punkty
+    W.okna = lambda: okna
+    W.ekrany = lambda: [W.Ekran(201, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True),
+                        W.Ekran(202, "\\\\.\\DISPLAY2", 2, 1920, 1080, nazwa="BenQ G2420HDB")]
+    aplikacja._punkty = punkty
+    aplikacja._obraz_dostepny = True
+    s = aplikacja.settings
+    s.nagranie_mikrofon = punkty[4].nazwa
+    s.nagranie_glosniki = punkty[2].nazwa
+    s.nagranie_obraz = True
+    if os.environ.get("ZRZUT_EKRAN"):
+        s.nagranie_ekran = "\\\\.\\DISPLAY1"
+    else:
+        s.nagranie_okno_program = "Zoom.exe"
+        s.nagranie_okno_tytul = "Spotkanie Zoom"
+    aplikacja._odswiez_zrodla()
+
 
 def przechwyc(hwnd):
     """Obraz okna przez PrintWindow — bez wyciągania go na wierzch.

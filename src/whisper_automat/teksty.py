@@ -1080,12 +1080,14 @@ EN = {
         "Not enough disk space to record video ({mb:.0f} MB free, at least 3 GB needed). "
         "Free up space or choose “Audio only — no video” in the “Video” field.",
     "Na karcie nagrywania wybierasz mikrofon, urządzenie, na którym słychać spotkanie, "
-    "i obraz: sam dźwięk, okno spotkania albo cały ekran (do pliku MKV). „Sprawdź” "
-    "nagra 5 sekund z mikrofonu i od razu je odtworzy. Słuchawki na zwykłym jacku grają "
-    "przez „głośniki komputera” — Windows ich nie odróżnia.":
+    "i obraz: sam dźwięk, okno spotkania albo cały ekran (do pliku MKV) — także "
+    "w trakcie nagrania. „Sprawdź” nagra 5 sekund z mikrofonu i od razu je odtworzy, "
+    "a „Wycisz” nagrywa samych rozmówców, gdy jesteś tylko słuchaczem. Słuchawki na "
+    "zwykłym jacku grają przez „głośniki komputera” — Windows ich nie odróżnia.":
         "On the recording card you choose the microphone, the device the meeting plays "
         "on, and the video: audio only, the meeting window or the whole screen (to an MKV "
-        "file). “Test” records 5 seconds from the microphone and plays them back. "
+        "file) — also during a recording. “Test” records 5 seconds from the microphone and "
+        "plays them back, and “Mute” records only the others when you are just listening. "
         "Headphones on a regular jack play through the “computer speakers” — Windows "
         "cannot tell them apart.",
     "Ten komputer nie widzi folderu z aktualizacjami — pewnie jest poza siecią firmy. "
@@ -1122,4 +1124,58 @@ EN = {
         "The program uses open-source libraries (including faster-whisper and FFmpeg) "
         "under their own licenses.",
     "Licencje składników": "Component licenses",
+    # 1.6.4: wyciszenie mikrofonu, wybór źródeł w trakcie, podgląd obrazu
+    "Wycisz": "Mute",
+    "Wyciszony": "Muted",
+    "Mikrofon wyciszony — w nagraniu jest teraz tylko dźwięk spotkania.":
+        "Microphone muted — the recording now has only the meeting audio.",
+    "Mikrofon wyciszony — nagranie pójdzie bez Ciebie, sam dźwięk spotkania. "
+    "Po nagraniu mikrofon wróci.":
+        "Microphone muted — the recording will go without you, meeting audio only. "
+        "The microphone comes back after the recording.",
+    "Mikrofon włączony — znów nagrywa się Twój głos.":
+        "Microphone on — your voice is being recorded again.",
+    "Mikrofon włączony.": "Microphone on.",
+    "Mikrofon wyciszony od początku — nagrywa się sam dźwięk spotkania.":
+        "Microphone muted from the start — recording the meeting audio only.",
+    "Nagrywam z wyciszonym mikrofonem — Twojego głosu nie będzie. "
+    "„Wyciszony” włącza mikrofon.":
+        "Recording with the microphone muted — your voice will not be in it. "
+        "“Muted” turns the microphone on.",
+    "Mikrofon wyciszony ({czas}).": "Microphone muted ({czas}).",
+    "Mikrofon włączony ({czas}).": "Microphone on ({czas}).",
+    "Mikrofon znów włączony — następne nagranie zacznie się z nim.":
+        "Microphone on again — the next recording will start with it.",
+    "Mikrofon nie dał się otworzyć — w nagraniu dalej cisza z Twojej strony.":
+        "The microphone could not be opened — the recording still has silence on your side.",
+    "Przełączam mikrofon…": "Switching the microphone…",
+    "Przełączam dźwięk spotkania…": "Switching the meeting audio…",
+    "Mikrofon przełączony na: {urzadzenie}": "Microphone switched to: {urzadzenie}",
+    "Dźwięk spotkania przełączony na: {urzadzenie}": "Meeting audio switched to: {urzadzenie}",
+    "{kto}: wybrane urządzenie nie dało się otworzyć — nagrywam dalej z poprzedniego.":
+        "{kto}: the chosen device could not be opened — recording continues from the "
+        "previous one.",
+    "Okna spotkania już nie ma — wybierz inne": "The meeting window is gone — choose another",
+    "Nagrywa się: {zrodlo}": "Recording: {zrodlo}",
+    "Program sam wybrał: {okno}": "Picked automatically: {okno}",
+    "{program} jest teraz zamknięty": "{program} is closed now",
+    "Okno wezmę przy starcie nagrania.": "I will take its window when the recording starts.",
+    "Teraz nie widzę okna spotkania": "No meeting window right now",
+    "Otwórz Zoom, Teams albo Meet. Przy starcie nagrania program sam znajdzie okno — "
+    "a jeśli go nie będzie, zapyta, co nagrywać.":
+        "Open Zoom, Teams or Meet. When the recording starts, the program finds the window "
+        "by itself — and if there is none, it asks what to record.",
+    "Łapię obraz…": "Capturing the picture…",
+    "Tak wygląda teraz nagrywany obraz. Podgląd pokazuje się też po najechaniu myszą "
+    "na listę „Obraz”; kliknięcie go chowa.":
+        "This is what is being recorded right now. The preview also shows when you hover "
+        "over the “Video” list; click it to hide.",
+    "Tak wygląda teraz to źródło. Podgląd pokazuje się też po najechaniu myszą na listę "
+    "„Obraz”; kliknięcie go chowa.":
+        "This is how this source looks right now. The preview also shows when you hover "
+        "over the “Video” list; click it to hide.",
+    "Okno jest zminimalizowane — przywróć je, inaczej obraz w nagraniu będzie stał.":
+        "The window is minimised — restore it, otherwise the recorded picture will freeze.",
+    "Tego okna już nie ma — wybierz inne z listy.":
+        "This window is gone — choose another one from the list.",
 }

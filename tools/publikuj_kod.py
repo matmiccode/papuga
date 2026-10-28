@@ -7,7 +7,7 @@ pliki bez tych elementów, jeden commit na publikację. Kod jest otwarty
 (MIT), a prywatna historia zostaje prywatna.
 
 Do publicznego repo trafia wszystko, co śledzi git, poza:
-  * PROGRESS.md i INSTRUKCJA.txt (dokumenty firmowe),
+  * PROGRESS.md, INSTRUKCJA.txt i katalogiem dokumentacja/ (dokumenty firmowe),
   * README.md — zastępuje go publikacja/README.md,
   * katalogiem publikacja/ (szablony dla tego skryptu).
 Do tego generowany LICENCJE.txt (tools/licencje.py).
@@ -42,7 +42,7 @@ from whisper_automat.core.wydanie import WYDANIA  # noqa: E402
 
 WYD = WYDANIA["papuga"]
 KLON = ROOT.parent / "papuga"
-WYKLUCZONE = ["PROGRESS.md", "INSTRUKCJA.txt", "README.md", "publikacja"]
+WYKLUCZONE = ["PROGRESS.md", "INSTRUKCJA.txt", "README.md", "publikacja", "dokumentacja"]
 PLIK_PODPISU = ROOT / "tools" / "podpis_firmy.local.txt"
 PLIK_KONTAKTU = ROOT / "tools" / "kontakt_firmy.local.txt"
 BINARNE = {".png", ".ico", ".onnx", ".bin", ".exe", ".dll", ".pyd", ".zip", ".jpg", ".woff2"}

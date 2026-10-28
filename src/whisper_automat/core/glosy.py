@@ -6,7 +6,7 @@ ten w transkrypcjach kolegów podpisuje się sam: program liczy odcisk głosu
 każdego rozpoznanego mówcy i porównuje z bazą, a okno „Kto jest kim?”
 dostaje imię jako podpowiedź.
 
-Zasady (decyzja autora 2026-10-15 po analizie prawnej w PROGRESS.md):
+Zasady (decyzja autora 2026-10-15 po analizie prawnej w dokumentacja/technika.md):
 
 * Tylko wydanie firmowe — Papuga nie ma tego modułu w interfejsie
   (`dostepna()` daje False). Odcisk głosu to dane biometryczne (RODO art. 9),

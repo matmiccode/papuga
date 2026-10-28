@@ -499,6 +499,145 @@ def rozmiar_zrodla(zrodlo: ZrodloObrazu) -> Tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
+# Podgląd na karcie nagrywania
+# ---------------------------------------------------------------------------
+
+#: Największy podgląd źródła (piksele), proporcje zostają.
+PODGLAD = (320, 180)
+
+
+def podglad(zrodlo: ZrodloObrazu, maks: Tuple[int, int] = PODGLAD) -> Optional[bytes]:
+    """Obraz okna albo ekranu w tej chwili, jako PPM (Tk czyta go bez Pillow).
+
+    Nie przez gfxcapture, choć to on nagrywa: na nieruchomym oknie nie daje
+    ani jednej klatki (pulapki.md), a sam start ffmpeg to ~1 s. PrintWindow
+    z PW_RENDERFULLCONTENT rysuje okno także zasłonięte i rysowane przez
+    kartę graficzną (Chromium, Teams) — zmierzone 2026-10-27: 20–100 ms.
+    None — okno zminimalizowane (nagranie też wtedy stoi) albo zamknięte.
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    import ctypes.wintypes as wt
+
+    import numpy as np
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG), ("biHeight", wt.LONG),
+                    ("biPlanes", wt.WORD), ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                    ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG),
+                    ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD),
+                    ("biClrImportant", wt.DWORD)]
+
+    class MONITORINFO(ctypes.Structure):
+        _fields_ = [("cbSize", wt.DWORD), ("rcMonitor", wt.RECT), ("rcWork", wt.RECT),
+                    ("dwFlags", wt.DWORD)]
+
+    # Własne kopie bibliotek: typy wyników uchwytów nie przeciekają do reszty programu.
+    u32, g32 = ctypes.WinDLL("user32"), ctypes.WinDLL("gdi32")
+    for funkcja in (u32.GetDC, g32.CreateCompatibleDC, g32.CreateCompatibleBitmap,
+                    g32.SelectObject):
+        funkcja.restype = ctypes.c_void_p
+    g32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    g32.CreateCompatibleBitmap.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    g32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    g32.BitBlt.argtypes = [ctypes.c_void_p] + [ctypes.c_int] * 4 + [ctypes.c_void_p,
+                                                                     ctypes.c_int, ctypes.c_int,
+                                                                     wt.DWORD]
+    g32.GetDIBits.argtypes = [ctypes.c_void_p, ctypes.c_void_p, wt.UINT, wt.UINT,
+                              ctypes.c_void_p, ctypes.c_void_p, wt.UINT]
+    g32.DeleteObject.argtypes = g32.DeleteDC.argtypes = [ctypes.c_void_p]
+    u32.ReleaseDC.argtypes = [wt.HWND, ctypes.c_void_p]
+    u32.PrintWindow.argtypes = [wt.HWND, ctypes.c_void_p, wt.UINT]
+
+    okno = isinstance(zrodlo, Okno)
+    poprzedni = _dpi_fizyczne()
+    ekran_dc = dc = bmp = None
+    try:
+        r = wt.RECT()
+        ramka = wt.RECT()
+        if okno:
+            hwnd = wt.HWND(zrodlo.hwnd)
+            if not u32.IsWindow(hwnd) or u32.IsIconic(hwnd) or not u32.GetWindowRect(
+                    hwnd, ctypes.byref(r)):
+                return None
+            # Bez niewidocznej ramki okna (cień DWM, ~8 px z każdej strony).
+            DWMWA_EXTENDED_FRAME_BOUNDS = 9
+            if ctypes.windll.dwmapi.DwmGetWindowAttribute(
+                    hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, ctypes.byref(ramka),
+                    ctypes.sizeof(ramka)) != 0:
+                ramka = r
+        else:
+            info = MONITORINFO()
+            info.cbSize = ctypes.sizeof(info)
+            if not u32.GetMonitorInfoW(ctypes.c_void_p(zrodlo.hmonitor), ctypes.byref(info)):
+                return None
+            r = ramka = info.rcMonitor
+        szer, wys = r.right - r.left, r.bottom - r.top
+        if szer <= 0 or wys <= 0:
+            return None
+        ekran_dc = u32.GetDC(None)
+        dc = g32.CreateCompatibleDC(ekran_dc)
+        bmp = g32.CreateCompatibleBitmap(ekran_dc, szer, wys)
+        if not (ekran_dc and dc and bmp):
+            return None
+        g32.SelectObject(dc, bmp)
+        if okno:
+            PW_RENDERFULLCONTENT = 2
+            if not u32.PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT):
+                return None
+        else:
+            SRCCOPY, CAPTUREBLT = 0x00CC0020, 0x40000000
+            if not g32.BitBlt(dc, 0, 0, szer, wys, ekran_dc, r.left, r.top, SRCCOPY | CAPTUREBLT):
+                return None
+        naglowek = BITMAPINFOHEADER()
+        naglowek.biSize = ctypes.sizeof(naglowek)
+        # Wysokość ujemna: wiersze od góry, jak w PPM.
+        naglowek.biWidth, naglowek.biHeight, naglowek.biPlanes, naglowek.biBitCount = (
+            szer, -wys, 1, 32)
+        bufor = ctypes.create_string_buffer(szer * wys * 4)
+        if not g32.GetDIBits(dc, bmp, 0, wys, bufor, ctypes.byref(naglowek), 0):
+            return None
+    finally:
+        if bmp:
+            g32.DeleteObject(bmp)
+        if dc:
+            g32.DeleteDC(dc)
+        if ekran_dc:
+            u32.ReleaseDC(None, ekran_dc)
+        _dpi_przywroc(poprzedni)
+    bgra = np.frombuffer(bufor, dtype=np.uint8).reshape(wys, szer, 4)
+    x0, y0 = max(0, ramka.left - r.left), max(0, ramka.top - r.top)
+    x1, y1 = min(szer, ramka.right - r.left), min(wys, ramka.bottom - r.top)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        x0, y0, x1, y1 = 0, 0, szer, wys
+    return ppm(zmniejsz(bgra[y0:y1, x0:x1, 2::-1], maks))
+
+
+def zmniejsz(rgb, maks: Tuple[int, int]):
+    """Obraz RGB (wys × szer × 3) zmieszczony w `maks`; uśrednianie bloków, nie co n-ty piksel
+    — drobny tekst okna nie zamienia się w szum."""
+    import numpy as np
+
+    wys, szer = rgb.shape[:2]
+    skala = min(1.0, maks[0] / szer, maks[1] / wys)
+    nowa_szer, nowa_wys = max(1, round(szer * skala)), max(1, round(wys * skala))
+    k = max(1, min(szer // nowa_szer, wys // nowa_wys))
+    if k > 1:
+        w2, s2 = wys // k * k, szer // k * k
+        rgb = rgb[:w2, :s2].reshape(w2 // k, k, s2 // k, k, 3).mean(axis=(1, 3), dtype=np.float32)
+    ys = (np.arange(nowa_wys) * rgb.shape[0] / nowa_wys).astype(int)
+    xs = (np.arange(nowa_szer) * rgb.shape[1] / nowa_szer).astype(int)
+    return np.ascontiguousarray(rgb[ys][:, xs], dtype=np.uint8)
+
+
+def ppm(rgb) -> bytes:
+    """Binarny PPM (P6) — tk.PhotoImage(data=…) czyta go bez dodatkowych bibliotek."""
+    wys, szer = rgb.shape[:2]
+    return b"P6 %d %d 255\n" % (szer, wys) + rgb.tobytes()
+
+
+# ---------------------------------------------------------------------------
 # ffmpeg
 # ---------------------------------------------------------------------------
 
