@@ -378,7 +378,7 @@ def zbuduj_tekst(skladniki: List[Skladnik], kod_wydania: str, firma: str = "") -
     else:
         o_programie = [
             f"Sam program ({wyd.nazwa}, kod w pakiecie whisper_automat) jest na licencji MIT.",
-            "Jej treść jest w pliku LICENSE.txt obok. Autor: MATCODE.",
+            f"Jej treść jest w pliku LICENSE.txt obok. Autor: {wyd.wydawca}.",
         ]
     linie = [
         f"{wyd.pelna_nazwa} {_wersja_programu()} — licencje składników",

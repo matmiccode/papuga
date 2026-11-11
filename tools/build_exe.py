@@ -8,10 +8,10 @@ Dwa warianty instalatora:
 
 Etapy:
   1. pobranie lekkiej wersji ffmpeg (raz, potem z pamięci podręcznej)
-  2. PyInstaller — katalog `dist/WhisperAutomat` z całą zawartością
+  2. PyInstaller — katalog `dist/<Wydanie.plik>` z całą zawartością
   3. spis licencji składników (tools/licencje.py) i LICENSE (tylko Papuga)
      obok pliku .exe
-  4. Inno Setup — jeden plik `dist/WhisperAutomat-<wersja>-Setup[-offline].exe`
+  4. Inno Setup — jeden plik `dist/<Wydanie.plik>-<wersja>-Setup[-offline].exe`
 
 Uruchomienie:
     .venv\\Scripts\\python.exe tools\\build_exe.py            wariant lekki
@@ -52,7 +52,7 @@ from whisper_automat.core import wydanie as wydania  # noqa: E402
 from whisper_automat import teksty  # noqa: E402
 
 #: Wydanie, które budujemy — ustawiane w main() z --wydanie.
-WYD: Wydanie = WYDANIA["firma"]
+WYD: Wydanie = WYDANIA[wydania.DOMYSLNE]
 
 #: Podpis wydania firmowego z imieniem i nazwiskiem leży POZA repozytorium:
 #: w tools/podpis_firmy.local.txt (plik ignorowany przez gita) albo w zmiennej
@@ -62,6 +62,8 @@ PLIK_PODPISU = Path(__file__).resolve().parent / "podpis_firmy.local.txt"
 
 
 def podpis_firmy() -> str:
+    """Podpis wydania firmowego. Bez niego budowa staje — wydanie firmowe
+    nie może podpisać się marką publiczną ani zostać bez wydawcy."""
     ze_srodowiska = os.environ.get("WHISPER_AUTOMAT_PODPIS_FIRMY", "").strip()
     if ze_srodowiska:
         return ze_srodowiska
@@ -70,8 +72,11 @@ def podpis_firmy() -> str:
     except OSError:
         tekst = ""
     if not tekst:
-        print(f"  UWAGA: brak {PLIK_PODPISU.name} — wydanie firmowe podpisze się samym MATCODE.")
-    return tekst or "MATCODE"
+        raise SystemExit(
+            f"Brak {PLIK_PODPISU} — wydanie firmowe nie ma czym się podpisać.\n"
+            f"  Wpisz do pliku jedną linię: „Imię Nazwisko – Firma”."
+        )
+    return tekst
 
 
 #: Adres do zgłoszeń z wydania firmowego („Zgłoś błąd lub pomysł” w stopce)
@@ -95,21 +100,25 @@ def kontakt_firmy() -> str:
 #: Folder z aktualizacjami wydania firmowego (udział sieciowy albo adres
 #: http) — też poza repozytorium, bo adres udziału firmy nie ma trafić do
 #: publikowanego kodu. Do paczki idzie przez wydanie.json, tak jak podpis.
+#: Przy przeprowadzce folderu: kilka ścieżek, każda w osobnym wierszu, nowa
+#: pierwsza — program bierze pierwszą istniejącą (core/wydanie.py).
 PLIK_AKTUALIZACJI = Path(__file__).resolve().parent / "aktualizacje_firmy.local.txt"
 
 
 def folder_aktualizacji_firmy() -> str:
-    ze_srodowiska = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
-    if ze_srodowiska:
-        return ze_srodowiska
-    try:
-        tekst = PLIK_AKTUALIZACJI.read_text(encoding="utf-8").strip()
-    except OSError:
-        tekst = ""
+    tekst = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
     if not tekst:
+        try:
+            tekst = PLIK_AKTUALIZACJI.read_text(encoding="utf-8").strip()
+        except OSError:
+            tekst = ""
+    foldery = replace(WYDANIA["firma"], aktualizacje_folder=tekst).foldery_aktualizacji
+    if not foldery:
         print(f"  UWAGA: brak {PLIK_AKTUALIZACJI.name} — wydanie firmowe nie będzie "
               f"sprawdzać aktualizacji.")
-    return tekst
+    for i, folder in enumerate(foldery, 1):
+        print(f"  Folder aktualizacji {i}/{len(foldery)}: {folder}")
+    return ";".join(foldery)
 
 #: Wersja „essentials" waży ułamek pełnej (~90 MB zamiast ~370 MB za oba pliki),
 #: a zawiera wszystkie kodeki, których używamy do wyciągania ścieżki audio.
@@ -194,9 +203,10 @@ def przygotuj_model(nazwa: str) -> Path:
         print(f"  z pamieci podrecznej: {cel}")
         return CACHE / "model"
 
+    # Najpierw katalog modeli budowanego wydania, potem pozostałych.
     zrodla = [
-        Path(os.environ.get("LOCALAPPDATA", "")) / WYD.plik / "models",
-        Path(os.environ.get("LOCALAPPDATA", "")) / "WhisperAutomat" / "models",
+        *dict.fromkeys(Path(os.environ.get("LOCALAPPDATA", "")) / w.plik / "models"
+                       for w in (WYD, *WYDANIA.values())),
         ROOT / "models",
     ]
     snapshot = None
@@ -288,7 +298,7 @@ def zbuduj_aplikacje(ffmpeg_dir: Path, z_cuda: bool,
         "--distpath", DIST,
         "--workpath", BUILD / "pyinstaller",
         "--specpath", BUILD,
-        "--add-data", f"{ASSETS}{os.pathsep}assets",
+        "--add-data", f"{przygotuj_zasoby()}{os.pathsep}assets",
         "--add-data", f"{plik_wydania}{os.pathsep}.",
         "--add-data", f"{ffmpeg_dir}{os.pathsep}bin",
     ]
@@ -315,6 +325,13 @@ def zbuduj_aplikacje(ffmpeg_dir: Path, z_cuda: bool,
     # Część modułów (app, pipeline) jest importowana dopiero w środku funkcji,
     # żeby przyspieszyć start — trzeba je zebrać jawnie.
     cmd += ["--collect-submodules", "whisper_automat"]
+    # Uwaga: collect-submodules nie widzi pakietu (zwraca pustą listę, sprawdzone
+    # 2026-11-06) — moduły trafiają do paczki z importów. Moduł danych wydania
+    # dokładamy więc jawnie, a dane innych wydań (nazwa, marka) wykluczamy.
+    cmd += ["--hidden-import", f"whisper_automat.wydania.{wydania.MODUL[WYD.kod]}"]
+    for modul in moduly_innych_wydan():
+        print(f"  pomijam moduł {modul}")
+        cmd += ["--exclude-module", modul]
 
     cmd.append(ROOT / "tools" / "entry_point.py")
     run(cmd, cwd=ROOT)
@@ -382,7 +399,7 @@ def ma_wbudowany_model(katalog_aplikacji: Path) -> bool:
 
 
 def nazwa_instalatora(wersja: str, offline: bool, cpu: bool) -> str:
-    """WhisperAutomat-1.1.0-Setup(-cpu)(-offline) — bez rozszerzenia.
+    """<Plik>-1.1.0-Setup(-cpu)(-offline) — bez rozszerzenia.
 
     Numer wersji w nazwie, bo na stronie z wydaniami obok siebie leżą
     pliki z różnych wersji, a pobrany plik ma mówić sam za siebie.
@@ -446,30 +463,64 @@ def zbuduj_instalator(katalog_aplikacji: Path) -> Path:
 
 
 def zasoby_wydania() -> Path:
-    """assets/<wydanie>/, gdy wydanie ma własną ikonę — inaczej wspólne assets/."""
-    wlasne = ASSETS / WYD.kod
+    """assets/<Wydanie.zasoby>/, gdy wydanie ma własną ikonę — inaczej wspólne assets/."""
+    wlasne = ASSETS / WYD.zasoby if WYD.zasoby else ASSETS
     return wlasne if (wlasne / "icon.ico").is_file() else ASSETS
 
 
-def odczytaj_metadane() -> dict:
-    """Wyciaga wersje, autora i firme z __init__.py pakietu.
+def przygotuj_zasoby() -> Path:
+    """Kopia assets/ do paczki bez katalogów grafik innych wydań.
 
-    Czytamy plik tekstowo zamiast importowac pakiet, bo build_exe.py dziala
-    takze wtedy, gdy zaleznosci programu nie sa zainstalowane.
+    Paczka firmowa nie może mieć grafik marki drugiego wydania (logo,
+    filiżanka) — nie wystarczy, że program ich nie pokazuje.
+    """
+    cudze = {w.zasoby for w in WYDANIA.values() if w.zasoby and w.zasoby != WYD.zasoby}
+    cel = BUILD / "assets"
+    shutil.rmtree(cel, ignore_errors=True)
+    shutil.copytree(ASSETS, cel, ignore=lambda katalog, nazwy: [
+        n for n in nazwy if Path(katalog) == ASSETS and n in cudze])
+    for nazwa in sorted(cudze):
+        print(f"  pomijam assets/{nazwa}/ (grafiki innego wydania)")
+    return cel
+
+
+def moduly_innych_wydan() -> list:
+    """Moduły z pakietu `wydania`, których ta paczka nie może zawierać."""
+    return [f"whisper_automat.wydania.{modul}" for kod, modul in sorted(wydania.MODUL.items())
+            if kod != WYD.kod]
+
+
+def sprawdz_tozsamosc(katalog: Path) -> None:
+    """Przed instalatorem: paczka nie może zdradzać drugiego wydania.
+
+    Firma — `sprawdz-firmowe.js` bez śladu MATCODE i nazwy wydania
+    publicznego; publiczne — `--publiczne`, bez śladu firmy i nazwy wydania
+    firmowego. Obie razem z installer.iss. Bez CZYSTO (albo bez narzędzia)
+    budowa staje — niesprawdzonej paczki się nie wydaje (tools/sprawdz_marke.py).
+    """
+    import sprawdz_marke
+
+    publiczne = WYD.kod != "firma"
+    log("Sprawdzenie: " + ("bez śladu firmy" if publiczne else "bez śladu marki publicznej"))
+    tez = [s for kod in sorted(WYDANIA) if kod != WYD.kod for s in sprawdz_marke.slowa_wydania(kod)]
+    sprawdz_marke.sprawdz([katalog, ROOT / "tools" / "installer.iss"], tez,
+                          publiczne=publiczne, opis=f"paczka {WYD.nazwa}")
+
+
+def odczytaj_metadane() -> dict:
+    """Wersja z __init__.py pakietu, wydawca i prawa z wydania.
+
+    Wersję czytamy z pliku tekstowo zamiast importować pakiet, bo build_exe.py
+    działa także wtedy, gdy zależności programu nie są zainstalowane.
     """
     tekst = (SRC / "whisper_automat" / "__init__.py").read_text(encoding="utf-8")
-    dane = {}
+    dane = {"version": "1.0.0"}
     for linia in tekst.splitlines():
-        for klucz in ("version", "author", "company", "publisher", "copyright"):
-            if linia.startswith(f"__{klucz}__"):
-                dane[klucz] = linia.split("=", 1)[1].strip().strip('"').strip("'")
-    dane.setdefault("version", "1.0.0")
-    dane.setdefault("author", "")
-    dane.setdefault("company", "")
-    dane.setdefault("copyright", "")
-    dane.setdefault("publisher", dane["company"])
-    # Podpis zależy od wydania: publiczne podpisuje się samą marką.
-    dane["publisher"] = WYD.wydawca
+        if linia.startswith("__version__"):
+            dane["version"] = linia.split("=", 1)[1].strip().strip('"').strip("'")
+    # Podpis zależy od wydania: publiczne podpisuje się samą marką, firmowe
+    # podpisem z tools/podpis_firmy.local.txt.
+    dane["author"] = dane["company"] = dane["publisher"] = WYD.wydawca
     dane["copyright"] = WYD.prawa
     return dane
 
@@ -481,8 +532,8 @@ def odczytaj_wersje() -> str:
 def main() -> int:
     global WYD
     parser = argparse.ArgumentParser(description="Buduje instalator programu.")
-    parser.add_argument("--wydanie", choices=sorted(WYDANIA), default="firma",
-                        help="firma = Whisper Automat (domyslnie), "
+    parser.add_argument("--wydanie", choices=sorted(WYDANIA), default=wydania.DOMYSLNE,
+                        help="firma = wydanie firmowe (domyslnie), "
                              "papuga = wersja publiczna z aktualizacjami.")
     parser.add_argument("--cpu", action="store_true",
                         help="Bez bibliotek CUDA — mniejsza paczka, tylko procesor.")
@@ -532,6 +583,11 @@ def main() -> int:
     log("Wynik")
     print(f"  katalog : {katalog}")
     print(f"  rozmiar : {rozmiar_katalogu(katalog):.2f} GB")
+
+    # Przed instalatorem: w paczce firmowej nie może być śladu marki
+    # publicznej, w publicznej — firmy. Trafienie zatrzymuje budowę (także
+    # z --installer-only).
+    sprawdz_tozsamosc(katalog)
 
     if args.no_installer:
         print("\n  Pominięto budowę instalatora (--no-installer).")

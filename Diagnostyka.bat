@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
-title Whisper Automat — diagnostyka
+title Transkrypcja — diagnostyka
 cd /d "%~dp0"
 
 if not exist ".venv/Scripts/python.exe" (

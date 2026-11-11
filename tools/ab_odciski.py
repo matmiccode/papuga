@@ -11,9 +11,12 @@ Wyniki w `%TEMP%\\whisper-automat-proby\\ab_odciski\\<nagranie>\\`:
   * `porownanie.txt` — każdy segment tekstu z mówcą według każdego modelu,
     numery kandydatów dopasowane do obecnego modelu; `≠` przy niezgodzie;
   * `statystyki.txt` / `statystyki.json` — liczba głosów, czas mowy, tury,
-    wtrącenia poniżej 2 s, zgodność z obecnym, czas liczenia.
+    wtrącenia poniżej 2 s, zgodność z obecnym, czas liczenia;
+  * `do-odsluchu.txt` — dla ucha autora: tylko zdania, które obecny model
+    i `DO_ODSLUCHU` przypisują różnym osobom, z próbkami „kto jest kim”.
 
-Przerwane? Uruchom jeszcze raz: transkrypcja i gotowe modele są pomijane.
+Przerwane? Uruchom jeszcze raz: transkrypcja i gotowe modele są pomijane
+(na policzonych nagraniach całość trwa kilka sekund).
 
     .venv\\Scripts\\python.exe tools\\ab_odciski.py "C:\\...\\a.mkv=3" "b.mkv=3"
 
@@ -51,6 +54,8 @@ KANDYDACI = [
     "wespeaker_en_voxceleb_CAM++_LM",
     "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced",
 ]
+#: Kandydat, którego autor porównuje uchem z obecnym (`do-odsluchu.txt`).
+DO_ODSLUCHU = "3dspeaker_speech_campplus_sv_zh_en_16k-common_advanced"
 KROTKA_TURA_S = 2.0
 
 
@@ -178,15 +183,57 @@ def zapisz_porownanie(katalog: Path, wynik, wyniki_modeli: dict) -> None:
         wiersze.append(f"  {i}: {nazwa}")
     wiersze.append("")
     for seg in wynik.segments:
-        numery = []
-        for nazwa in nazwy:
-            odcinki, mapowanie = wyniki_modeli[nazwa]
-            m = diarization._dominujacy(seg.start, seg.end, odcinki)
-            numery.append(mapowanie.get(m, m) if m >= 0 else -1)
-        kolumny = " ".join(f"{n + 1}" if n >= 0 else "?" for n in numery)
+        numery = [mowca(seg, *wyniki_modeli[nazwa]) for nazwa in nazwy]
+        kolumny = " ".join(osoba(n) for n in numery)
         znak = "≠" if len(set(numery)) > 1 else " "
         wiersze.append(f"[{writers._clock(seg.start)}] {znak} {kolumny}  {seg.text.strip()}")
     (katalog / "porownanie.txt").write_text("\n".join(wiersze) + "\n", encoding="utf-8")
+
+
+def mowca(seg, odcinki, mapowanie) -> int:
+    """Mówca segmentu w numeracji obecnego modelu, -1 = nikt."""
+    m = diarization._dominujacy(seg.start, seg.end, odcinki)
+    return mapowanie.get(m, m) if m >= 0 else -1
+
+
+def osoba(n: int) -> str:
+    return f"{n + 1}" if n >= 0 else "?"
+
+
+def zapisz_do_odsluchu(katalog: Path, zrodlo: Path, wynik, wyniki_modeli: dict) -> None:
+    """Lista dla ucha autora: zdania, które obecny model i DO_ODSLUCHU
+    przypisują różnym osobom, a przed nimi próbki „kto jest kim”."""
+    nr = 2 + KANDYDACI.index(DO_ODSLUCHU)
+    zdania = [(writers._clock(seg.start)[:8], mowca(seg, *wyniki_modeli[OBECNY]),
+               mowca(seg, *wyniki_modeli[DO_ODSLUCHU]), seg.text.strip())
+              for seg in wynik.segments]
+    zgodne: dict = {}
+    for czas, a, b, tekst in zdania:
+        if a == b and a >= 0:
+            zgodne.setdefault(a, []).append((czas, tekst))
+    spory = [z for z in zdania if z[1] != z[2]]
+
+    wiersze = [f"DO ODSŁUCHU — {zrodlo.name}",
+               f"Zdań: {len(zdania)}, z tego obecny model i nr {nr} różnią się w {len(spory)}.",
+               "",
+               f"KROK 1. Kto jest kim — tu obecny i nr {nr} są zgodne. Posłuchaj i dopisz imię:",
+               ""]
+    for n in sorted(zgodne):
+        wiersze.append(f"  Osoba {osoba(n)} = ____________")
+        # dwie najdłuższe wypowiedzi, w kolejności czasu
+        for czas, tekst in sorted(sorted(zgodne[n], key=lambda z: -len(z[1]))[:2]):
+            wiersze.append(f"      [{czas}]  {tekst[:110]}")
+        wiersze.append("")
+    wiersze += ["KROK 2. Te miejsca puść w VLC (Ctrl+T = przejdź do czasu) i wpisz,",
+                "kto mówił naprawdę (numer osoby z kroku 1, „?” gdy nie wiesz).",
+                "",
+                f"  czas        obecny  nr {nr}   naprawdę   tekst"]
+    for czas, a, b, tekst in spory:
+        wiersze.append(f"  [{czas}]    {osoba(a)}      {osoba(b)}     ____      {tekst[:90]}")
+    wiersze += ["",
+                f"KROK 3. Policz: obecny miał rację ___ razy, nr {nr} ___ razy.",
+                "Wszystkie pozostałe zdania oba modele przypisały tak samo."]
+    (katalog / "do-odsluchu.txt").write_text("\n".join(wiersze) + "\n", encoding="utf-8")
 
 
 def zapisz_statystyki(katalog: Path, zrodlo: Path, ilu: int, staty: dict) -> None:
@@ -243,6 +290,7 @@ def nagranie(zrodlo: Path, ilu: int, silnik: dict) -> None:
         zapisz_porownanie(katalog, wynik, wyniki_modeli)
         log(f"{zrodlo.name}: {nazwa} — głosy {s['glosy']}, zgodność {zgodnosc:.0%}, "
             f"{czas_s:.0f} s")
+    zapisz_do_odsluchu(katalog, zrodlo, wynik, wyniki_modeli)
 
 
 def main(argv) -> int:

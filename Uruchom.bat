@@ -12,5 +12,5 @@ if not exist ".venv/Scripts/pythonw.exe" (
 )
 
 set "PYTHONPATH=%~dp0src"
-start "Whisper Automat" ".venv/Scripts/pythonw.exe" -m whisper_automat %*
+start "Transkrypcja" ".venv/Scripts/pythonw.exe" -m whisper_automat %*
 exit /b 0

@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from .wydanie import biezace
 
-#: Nazwa i tożsamość zależą od wydania (firmowe / Papuga) — patrz wydanie.py.
+#: Nazwa i tożsamość zależą od wydania (firmowe / publiczne) — patrz wydanie.py.
 WYDANIE = biezace()
 APP_NAME = WYDANIE.nazwa
 #: Nazwa z hasłem po myślniku — tytuł okna i ekran powitalny.
@@ -67,13 +67,14 @@ def data_root() -> Path:
 def asset(name: str) -> Optional[Path]:
     """Ścieżka do pliku z assets/ albo None, gdy go nie ma.
 
-    Najpierw szuka w katalogu wydania (assets/papuga/…), potem we wspólnym
-    assets/ — wydanie bez własnych zasobów dostaje firmowe. Obsługuje też
+    Najpierw szuka w katalogu grafik wydania (assets/<Wydanie.zasoby>/…),
+    potem we wspólnym assets/ — wydanie bez własnych dostaje wspólne. Obsługuje też
     wersję spakowaną: PyInstaller rozpakowuje zasoby do katalogu
     tymczasowego wskazywanego przez sys._MEIPASS.
     """
     for katalog in (bundled_root() / "assets", project_root() / "assets"):
-        for kandydat in (katalog / WYDANIE.kod / name, katalog / name):
+        wlasne = (katalog / WYDANIE.zasoby / name,) if WYDANIE.zasoby else ()
+        for kandydat in (*wlasne, katalog / name):
             if kandydat.is_file():
                 return kandydat
     return None

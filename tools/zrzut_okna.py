@@ -9,12 +9,15 @@ Kolejkę wypełnia udawanymi plikami.
 Tryby: pusty, kolejka, dziennik, baner, mowcy, pomoc, licencja (wydanie firmowe),
 nagrywanie, zrodla (karta nagrywania na udawanych urządzeniach i oknach), glos,
 wynik, dymek (pytanie przy udostępnianiu ekranu), dymek-okno (po nim),
+dymek-udostepnianie (obraz sam za udostępnianiem w Teams),
+dymek-meet (pytanie o monitor przy udostępnianiu w przeglądarce),
 strona (kolejka + zrodla, neutralny folder wyników i imię — zrzut na stronę).
 Zmienne: WHISPER_AUTOMAT_WYDANIE=firma|papuga (domyślnie papuga), ZRZUT_EKRAN=1
 (w trybie zrodla wybrany „Cały ekran” zamiast okna Zoom), ZRZUT_WYCISZONY=1
 (mikrofon wyciszony w trybach zrodla i nagrywanie),
 WHISPER_AUTOMAT_JEZYK=pl|en (język okna; domyślnie język Windows),
-ZRZUT_GEOM=980x660 (rozmiar okna).
+ZRZUT_GEOM=980x660 (rozmiar okna), ZRZUT_WERSJA=1.6.4 (numer w nagłówku — zrzut
+na stronę robi się przed wydaniem, gdy kod ma jeszcze poprzedni).
 
 Wydanie firmowe dostaje podpis autora z tools/podpis_firmy.local.txt (jeśli
 plik jest) — tak jak w paczce, więc zrzut pokazuje prawdziwą stopkę.
@@ -43,6 +46,11 @@ if os.environ["WHISPER_AUTOMAT_WYDANIE"] == "firma":
     # „Dodaj mój głos do bazy…” ma być na zrzutach wydania firmowego.
     os.environ.setdefault("WHISPER_AUTOMAT_GLOSY", str(wyjscie.parent / "zrzut-glosy"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+import whisper_automat  # noqa: E402
+
+if os.environ.get("ZRZUT_WERSJA"):
+    whisper_automat.__version__ = os.environ["ZRZUT_WERSJA"]
 
 from whisper_automat import app as A  # noqa: E402
 from whisper_automat.core import update  # noqa: E402
@@ -172,7 +180,7 @@ def przygotuj():
         aplikacja.status_var.set(t("Nagrywam. Poinformuj uczestników, że spotkanie jest nagrywane."))
         if os.environ.get("ZRZUT_WYCISZONY"):
             aplikacja.rec_paski["mikrofon"]["value"] = 0
-    if tryb in ("dymek", "dymek-okno"):
+    if tryb in ("dymek", "dymek-okno", "dymek-udostepnianie", "dymek-meet"):
         # Dymek przy udostępnianiu ekranu (dwa udawane monitory) albo po nim.
         from whisper_automat.core import wideo as W
 
@@ -180,6 +188,12 @@ def przygotuj():
                             W.Ekran(202, "\\\\.\\DISPLAY2", 2, 1920, 1080, nazwa="BenQ G2420HDB")]
         if tryb == "dymek":
             aplikacja._dymek_caly_ekran()
+        elif tryb == "dymek-udostepnianie":
+            aplikacja._nagrywa = lambda: True
+            aplikacja._po_udostepnianiu(W.ekrany()[1])
+        elif tryb == "dymek-meet":
+            aplikacja._nagrywa = lambda: True
+            aplikacja._po_udostepnianiu(W.Pytanie("ekran"))
         else:
             aplikacja._dymek_okno()
     if tryb in ("zrodla", "strona", "nagrywanie"):
@@ -293,10 +307,14 @@ def zrob():
         p = aplikacja._licencja
         p.update()
         hwnd = ctypes.windll.user32.GetParent(p.winfo_id())
-    elif tryb in ("dymek", "dymek-okno"):
+    elif tryb in ("dymek", "dymek-okno", "dymek-udostepnianie", "dymek-meet"):
         okno = aplikacja._dymek.okno
         okno.update()
         hwnd = aplikacja._dymek._hwnd()
+        # Dymek jest wyłączony z przechwytywania (nie widać go w udostępnianiu)
+        # — PrintWindow daje wtedy czarny prostokąt. Na zrzut włączamy go.
+        ctypes.windll.user32.SetWindowDisplayAffinity(hwnd, 0)
+        okno.update()
     elif tryb == "glos":
         okno = aplikacja._okno_glosu.win
         okno.update()

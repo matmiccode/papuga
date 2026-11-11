@@ -6,7 +6,9 @@ Kroki (każdy wypisuje jedną linię; przy błędzie — ogon wyjścia i stop):
   1. drzewo git czyste (albo --brudne), testy (albo --bez-testow),
   2. numer wersji w src/whisper_automat/__init__.py i w stopce INSTRUKCJA.txt,
      commit „Wersja X.Y.Z” i tag vX.Y.Z (albo --bez-commitu),
-  3. firma:  build_exe.py --z-modelem → publikuj_wydanie.py --wydanie firma
+  3. firma:  build_exe.py --z-modelem (przed instalatorem sprawdz-firmowe.js
+             na paczce i installer.iss — bez CZYSTO budowa staje)
+             → publikuj_wydanie.py --wydanie firma
              (z kopią zapasową, gdy jest tools/kopia_wydan.local.txt),
   4. papuga: build_exe.py --wydanie papuga → sprawdz_paczke.py →
              publikuj_wydanie.py (szkic na GitHubie; --od-razu publikuje)
@@ -77,10 +79,22 @@ def ustaw_wersje(nowa: str) -> None:
         f'__version__ = "{stara}"', f'__version__ = "{nowa}"')
     INIT.write_text(tekst, encoding="utf-8", newline="\n")
     if INSTRUKCJA.is_file():
+        # Stopka instrukcji (tylko wydanie firmowe): „<Nazwa> X.Y.Z — <firma>”.
+        nazwa = re.escape(nazwa_firmy())
         t = INSTRUKCJA.read_text(encoding="utf-8")
-        INSTRUKCJA.write_text(re.sub(r"Whisper Automat \d+\.\d+\.\d+", f"Whisper Automat {nowa}", t),
+        INSTRUKCJA.write_text(re.sub(rf"({nazwa}) \d+\.\d+\.\d+", rf"\g<1> {nowa}", t),
                               encoding="utf-8", newline="\n")
     print(f"   wersja {stara} → {nowa}")
+
+
+def nazwa_firmy() -> str:
+    """Nazwa wydania firmowego z jego modułu (w kodzie publicznym go nie ma)."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from whisper_automat.core.wydanie import WYDANIA
+
+    if "firma" not in WYDANIA:
+        raise SystemExit("Brak modułu wydania firmowego (src/whisper_automat/wydania/firmowe.py).")
+    return WYDANIA["firma"].nazwa
 
 
 def opis(nazwa: str) -> list:
@@ -129,9 +143,10 @@ def main() -> int:
                 uruchom(["git", "tag", f"v{args.wersja}"], f"tag v{args.wersja}")
 
     if "firma" in wydania:
-        krok("Whisper Automat (firma)")
+        krok(f"{nazwa_firmy()} (firma)")
         if args.tylko_krok in (None, "build"):
-            uruchom([str(PY), "tools/build_exe.py", "--z-modelem"], "budowa offline", ogon=40)
+            uruchom([str(PY), "tools/build_exe.py", "--z-modelem"],
+                    "budowa offline + sprawdzenie sprawdz-firmowe.js (CZYSTO)", ogon=40)
         if args.tylko_krok in (None, "publikuj"):
             uruchom([str(PY), "tools/publikuj_wydanie.py", "--wydanie", "firma",
                      *opis(f"opis-firma-{args.wersja}.md")], "publikacja do folderu firmowego + kopia")

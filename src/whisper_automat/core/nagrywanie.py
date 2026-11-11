@@ -293,8 +293,12 @@ class ZdarzeniaNagrywania:
     #: Okno spotkania schowało się (True — zwykle udostępnianie ekranu) albo
     #: wróciło (False); okno programu pyta wtedy o przełączenie obrazu.
     okno_spotkania: Callable[[bool], None] = lambda _s: None
-    #: Obraz idzie już z nowego źródła (po `Nagrywarka.przelacz_obraz`).
+    #: Obraz idzie już z nowego źródła (po `Nagrywarka.przelacz_obraz` albo
+    #: sam, za udostępnianiem ekranu).
     zrodlo_obrazu: Callable[[object], None] = lambda _z: None
+    #: Udostępniasz ekran albo okno (wideo.Ekran / wideo.Okno: co) — obraz
+    #: sam idzie za tym; None — udostępnianie skończone.
+    udostepnianie: Callable[[object], None] = lambda _z: None
     #: Tor nagrywa już z urządzenia wybranego w trakcie (po
     #: `Nagrywarka.przelacz_urzadzenie`): "mikrofon" albo "system" i nazwa.
     przepiety: Callable[[str, str], None] = lambda _t, _u: None
@@ -1322,7 +1326,8 @@ class Nagrywarka:
                     obraz = wideo.ObrazSpotkania(
                         self._zrodlo_obrazu, plik, sciezka_ff, ostrzezenie=zd.ostrzezenie,
                         zapisz_stan=lambda odcinki: self._zapisz_stan(obraz=odcinki),
-                        zmiana_okna=zd.okno_spotkania)
+                        zmiana_okna=zd.okno_spotkania, udostepnianie=zd.udostepnianie,
+                        zmiana_zrodla=zd.zrodlo_obrazu)
                     obraz.ruszaj(0.0)
 
             wydane = 0

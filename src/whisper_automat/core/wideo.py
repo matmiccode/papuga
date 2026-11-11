@@ -1,7 +1,10 @@
 """Obraz spotkania: wybrane okno (Zoom, Teams…) albo cały ekran do MKV obok dźwięku.
 
 Cały ekran jest na udostępnianie ekranu: Zoom i Teams chowają wtedy okno
-spotkania, więc nagranie okna by stało (klasa Ekran).
+spotkania, więc nagranie okna by stało (klasa Ekran). Teams i Zoom kładą
+na udostępniany ekran albo okno ramkę — po niej program sam przełącza obraz
+na to, co udostępniasz, i wraca do okna spotkania po końcu
+(`udostepniane`, `ObrazSpotkania._pilnuj_udostepniania`).
 
 Skąd obraz: filtr `gfxcapture` w ffmpeg (od wersji 9 w paczce; Windows
 Graphics Capture). Łapie okno po uchwycie, także zasłonięte innymi oknami
@@ -109,6 +112,9 @@ class Okno:
     szer: int = 0
     wys: int = 0
     zminimalizowane: bool = False
+    #: Lewy górny róg w pikselach ekranu (zminimalizowane — miejsce sprzed minimalizacji).
+    x: int = 0
+    y: int = 0
 
 
 def nazwa_programu(program: str) -> str:
@@ -237,7 +243,7 @@ def _opisz(hwnd: int, wlasny_pid: int) -> Optional[Okno]:
     if szer < 200 or wys < 120:
         return None
     return Okno(hwnd=hwnd, tytul=tytul, program=_program(pid.value), szer=szer, wys=wys,
-                zminimalizowane=zminimalizowane)
+                zminimalizowane=zminimalizowane, x=prost.left, y=prost.top)
 
 
 def _program(pid: int) -> str:
@@ -304,6 +310,9 @@ class Ekran:
     glowny: bool = False
     #: Nazwa monitora („BenQ G2420HDB”); pusta, gdy Windows zna tylko ogólną.
     nazwa: str = ""
+    #: Lewy górny róg na pulpicie (drugi monitor zwykle x=1920).
+    x: int = 0
+    y: int = 0
 
 
 #: Ogólne nazwy monitorów, które nic nie mówią (ekran laptopa zwykle taki ma).
@@ -347,7 +356,7 @@ def ekrany() -> List[Ekran]:
                 hmonitor=int(hmonitor), urzadzenie=info.szDevice, numer=len(wynik) + 1,
                 szer=r.right - r.left, wys=r.bottom - r.top,
                 glowny=bool(info.dwFlags & MONITORINFOF_PRIMARY),
-                nazwa="" if _OGOLNA_NAZWA.search(nazwa) else nazwa))
+                nazwa="" if _OGOLNA_NAZWA.search(nazwa) else nazwa, x=r.left, y=r.top))
         return True
 
     poprzedni = _dpi_fizyczne()
@@ -393,6 +402,200 @@ def ekran_okna(hwnd: int, lista: Sequence[Ekran]) -> Optional[Ekran]:
 
 #: Co nagrywa obraz spotkania: okno albo cały monitor.
 ZrodloObrazu = Union[Okno, Ekran]
+
+
+# ---------------------------------------------------------------------------
+# Udostępnianie ekranu
+# ---------------------------------------------------------------------------
+
+#: Okna-ramki, które program do spotkań kładzie na udostępniany ekran albo
+#: okno: (proces, klasa okna). Zmierzone sondą
+#: (tools/proby/sonda_udostepniania.py) 2026-11-03, ramka ma dokładnie
+#: prostokąt monitora (cały ekran) albo okna (jedno okno):
+#: - nowy Teams 26276 — `ScreenBorderWindow`. Okno spotkania przy
+#:   udostępnianiu całego ekranu NIE chowa się, a jego nagranie daje czarny
+#:   obraz — stąd ramka, nie stan okna spotkania;
+#: - Zoom Workplace — `ZoomAnnoWindowWndClass` („Annotation - Zoom”, warstwa
+#:   adnotacji). Przez pierwsze ~4 s ma 10×10 w (0,0) — nie pasuje do niczego,
+#:   więc czekamy. Ramka CptHost.exe „sharing frame” zawsze ma rozmiar
+#:   monitora, także przy jednym oknie — nie nadaje się.
+RAMKI_UDOSTEPNIANIA = {("ms-teams.exe", "ScreenBorderWindow"),
+                       ("zoom.exe", "ZoomAnnoWindowWndClass")}
+#: Tolerancja dopasowania ramki do monitora albo okna (px). Zmierzone: ramka
+#: okna jest o 0–7 px mniejsza niż GetWindowRect (niewidoczne krawędzie okna).
+LUZ_RAMKI = 24
+#: Pasek przeglądarki przy udostępnianiu ze strony (Google Meet w Chrome,
+#: sonda 2026-11-03): okno `Chrome_WidgetWin_1` z tytułem „Aplikacja
+#: meet.google.com udostępnia Twój ekran.” albo „meet.google.com udostępnia
+#: okno.”. Stoi zawsze na dole głównego monitora — nie mówi, który monitor ani
+#: które okno. Udostępnione okno Chrome wyciąga na wierzch ~1 s po pasku, a po
+#: 1–2 s wierzch zabiera pływający podgląd Meet. Karta przeglądarki nie zostawia
+#: żadnego okna. Angielskie tytuły Chrome — nie mierzone, z tekstów Chromium.
+PASEK_PRZEGLADARKI = re.compile(
+    r"(?i)udostępnia (?P<pl>twój ekran|okno)|is sharing (?P<en>your screen|a window)")
+PASEK_KLASA = "Chrome_WidgetWin_1"
+#: Okna na wierzchu sprzed tylu sekund od pierwszego zobaczenia paska liczą
+#: się jako kandydaci na udostępnione okno (pasek widać co 1 s, okno wychodzi
+#: na wierzch ~1 s po pasku).
+WIERZCH_PRZED_S = 2.5
+#: Co ile sekund szukać ramki w trakcie nagrania. Zmiana liczy się dopiero,
+#: gdy dwa kolejne odczyty się zgadzają (ramka migająca przy starcie).
+CO_ILE_UDOSTEPNIANIE_S = 1.0
+
+Prostokat = Tuple[int, int, int, int]
+
+
+def prostokat(zrodlo: ZrodloObrazu) -> Prostokat:
+    """(lewa, góra, prawa, dół) w pikselach ekranu."""
+    return (zrodlo.x, zrodlo.y, zrodlo.x + zrodlo.szer, zrodlo.y + zrodlo.wys)
+
+
+def _odchylka(a: Prostokat, b: Prostokat) -> int:
+    return max(abs(x - y) for x, y in zip(a, b))
+
+
+def rozpoznaj_udostepnianie(ramka: Prostokat, ekrany_: Sequence[Ekran],
+                            okna_: Sequence[Okno]) -> Optional[ZrodloObrazu]:
+    """Co jest udostępniane, po prostokącie ramki: monitor, okno albo None
+    (ramka nie pasuje do niczego — np. okno właśnie się przesuwa).
+
+    Monitor wygrywa z oknem zmaksymalizowanym, które ma prawie ten sam
+    prostokąt: przy udostępnianiu całego ekranu nagrywa się cały ekran.
+    """
+    for ekran in ekrany_:
+        if _odchylka(ramka, prostokat(ekran)) <= LUZ_RAMKI:
+            return ekran
+    pasujace = [o for o in okna_ if not o.zminimalizowane
+                and _odchylka(ramka, prostokat(o)) <= LUZ_RAMKI]
+    return min(pasujace, key=lambda o: _odchylka(ramka, prostokat(o)), default=None)
+
+
+@dataclass(frozen=True)
+class Pytanie:
+    """Udostępniasz ze strony w przeglądarce, ale nie wiadomo co: `rodzaj`
+    "ekran" (kilka monitorów) albo "okno" (nie wyszło na wierzch). Okno
+    programu pyta wtedy, który monitor nagrywać."""
+
+    rodzaj: str
+
+
+def rodzaj_paska(tytul: str) -> Optional[str]:
+    """Tytuł paska przeglądarki → "ekran", "okno" albo None (to nie pasek)."""
+    trafienie = PASEK_PRZEGLADARKI.search(tytul)
+    if trafienie is None:
+        return None
+    tekst = (trafienie.group("pl") or trafienie.group("en") or "").lower()
+    return "okno" if tekst in ("okno", "a window") else "ekran"
+
+
+def sygnaly_udostepniania() -> Tuple[Optional[Prostokat], Optional[str]]:
+    """(prostokąt ramki Teams/Zooma albo None, rodzaj paska przeglądarki albo
+    None) — jedno przejście po oknach, ~2 ms."""
+    if os.name != "nt":
+        return None, None
+    import ctypes
+    import ctypes.wintypes as wt
+
+    u32 = ctypes.windll.user32
+    ramki: List[Prostokat] = []
+    paski: List[str] = []
+    klasy = {k for _p, k in RAMKI_UDOSTEPNIANIA}
+    PROC = ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+
+    def program_okna(h) -> str:
+        pid = wt.DWORD(0)
+        u32.GetWindowThreadProcessId(h, ctypes.byref(pid))
+        return _program(pid.value).lower()
+
+    def szukaj(hwnd, _lparam):
+        try:
+            h = wt.HWND(hwnd)
+            klasa = ctypes.create_unicode_buffer(64)
+            u32.GetClassNameW(h, klasa, 64)
+            if klasa.value in klasy and u32.IsWindowVisible(h):
+                if (program_okna(h), klasa.value) in RAMKI_UDOSTEPNIANIA:
+                    r = wt.RECT()
+                    if u32.GetWindowRect(h, ctypes.byref(r)) and r.right > r.left:
+                        ramki.append((r.left, r.top, r.right, r.bottom))
+            elif klasa.value == PASEK_KLASA and u32.IsWindowVisible(h):
+                dlugosc = u32.GetWindowTextLengthW(h)
+                if 0 < dlugosc < 200:
+                    bufor = ctypes.create_unicode_buffer(dlugosc + 1)
+                    u32.GetWindowTextW(h, bufor, dlugosc + 1)
+                    rodzaj = rodzaj_paska(bufor.value)
+                    if rodzaj and program_okna(h) in PRZEGLADARKI:
+                        paski.append(rodzaj)
+        except Exception:
+            pass
+        return True
+
+    poprzedni = _dpi_fizyczne()
+    try:
+        u32.EnumWindows(PROC(szukaj), 0)
+    finally:
+        _dpi_przywroc(poprzedni)
+    return (ramki[0] if ramki else None), (paski[0] if paski else None)
+
+
+def ramka_udostepniania() -> Optional[Prostokat]:
+    """Prostokąt widocznej ramki udostępniania (RAMKI_UDOSTEPNIANIA) albo None."""
+    return sygnaly_udostepniania()[0]
+
+
+def okno_na_wierzchu() -> int:
+    """Uchwyt okna na pierwszym planie (0 — żadne)."""
+    if os.name != "nt":
+        return 0
+    import ctypes
+
+    return int(ctypes.windll.user32.GetForegroundWindow() or 0)
+
+
+def okno_z_wierzchu(kolejno: Sequence[int], okna_: Sequence[Okno]) -> Optional[Okno]:
+    """Udostępnione okno przy pasku przeglądarki: pierwsze z `kolejno` (okna,
+    które wychodziły na wierzch, od najstarszego), które jeszcze jest, nie jest
+    zminimalizowane i nie jest oknem spotkania (Meet, jego pływający podgląd).
+
+    Od najstarszego, bo zaraz po udostępnieniu wierzch zabiera podgląd Meet,
+    a potem użytkownik klika gdzie indziej — wybór ma się nie zmieniać.
+    """
+    po_uchwycie = {o.hwnd: o for o in okna_}
+    for hwnd in kolejno:
+        okno = po_uchwycie.get(hwnd)
+        if okno is not None and not okno.zminimalizowane and not czy_spotkanie(okno):
+            return okno
+    return None
+
+
+def udostepniane(wierzch: Sequence[int] = ()) -> Tuple[bool, object]:
+    """(czy widać, że udostępniasz, co jest udostępniane).
+
+    Ramka Teams/Zooma daje monitor albo okno. Pasek przeglądarki: cały ekran
+    przy jednym monitorze — ten monitor, przy kilku — Pytanie("ekran"); okno
+    — to, które wyszło na wierzch (`wierzch`, od najstarszego), inaczej
+    Pytanie("okno"). (True, None) — ramka jest, ale nie wiadomo czego: lepiej
+    nic nie zmieniać, niż uznać, że udostępnianie się skończyło.
+    """
+    ramka, pasek = sygnaly_udostepniania()
+    if ramka is not None:
+        return True, rozpoznaj_udostepnianie(ramka, ekrany(), okna())
+    if pasek is None:
+        return False, None
+    if pasek == "ekran":
+        lista = ekrany()
+        return True, (lista[0] if len(lista) == 1 else Pytanie("ekran"))
+    return True, (okno_z_wierzchu(wierzch, okna()) or Pytanie("okno"))
+
+
+def klucz_zrodla(zrodlo):
+    """Do porównań: ten sam monitor albo to samo okno, choć inny obiekt."""
+    if zrodlo is None:
+        return None
+    if isinstance(zrodlo, Pytanie):
+        return ("pytanie", zrodlo.rodzaj)
+    if isinstance(zrodlo, Ekran):
+        return ("ekran", zrodlo.urzadzenie)
+    return ("okno", zrodlo.hwnd)
 
 
 def cel(zrodlo: ZrodloObrazu) -> str:
@@ -902,7 +1105,12 @@ class ObrazSpotkania:
     def __init__(self, zrodlo: ZrodloObrazu, plik_audio: Path, sciezka_ffmpeg: str,
                  ostrzezenie: Callable[[str], None] = lambda _t: None,
                  zapisz_stan: Callable[[list], None] = lambda _s: None,
-                 zmiana_okna: Callable[[bool], None] = lambda _s: None):
+                 zmiana_okna: Callable[[bool], None] = lambda _s: None,
+                 udostepnianie: Callable[[Optional[ZrodloObrazu]], None] = lambda _z: None,
+                 zmiana_zrodla: Callable[[ZrodloObrazu], None] = lambda _z: None,
+                 szukaj_udostepniania: Optional[
+                     Callable[[Sequence[int]], Tuple[bool, object]]] = None,
+                 na_wierzchu: Callable[[], int] = okno_na_wierzchu):
         self.zrodlo = zrodlo
         self.plik_audio = Path(plik_audio)
         self.odcinki: List[Odcinek] = []
@@ -918,6 +1126,28 @@ class ObrazSpotkania:
         #: schowało się (udostępnianie) albo wróciło — `zmiana_okna(schowane)`.
         self.okno_spotkania: Optional[Okno] = zrodlo if isinstance(zrodlo, Okno) else None
         self._schowane = False
+        # Udostępnianie ekranu (ramka Teams): `udostepnianie(co)` przy starcie
+        # i zmianie, `udostepnianie(None)` po końcu; `zmiana_zrodla(nowe)`, gdy
+        # obraz sam się przełączył.
+        self._udostepnianie = udostepnianie
+        self._zmiana_zrodla = zmiana_zrodla
+        self._szukaj_udostepniania = szukaj_udostepniania or udostepniane
+        self._ostatnie_szukanie = float("-inf")
+        #: Ostatni odczyt (klucz) — zmiana liczy się, gdy dwa kolejne się zgadzają.
+        self._kandydat = None
+        #: Ramka udostępniania widoczna przy ostatnim odczycie (choćby jeszcze
+        #: bez dopasowania — Zoom przez pierwsze sekundy ma ją 10×10).
+        self._ramka_widac = False
+        #: Udostępniane teraz (klucz), już obsłużone.
+        self._udostepniane = None
+        #: Źródło sprzed udostępniania — do niego obraz wraca po końcu.
+        self._przed_udostepnieniem: Optional[ZrodloObrazu] = None
+        #: Okna, które wychodziły na wierzch: (monotonic, uchwyt), co pętlę
+        #: nagrywania (~0,1 s) — udostępnione okno jest na wierzchu krótko.
+        self._na_wierzchu = na_wierzchu
+        self._wierzch: deque = deque(maxlen=40)
+        #: Od kiedy widać sygnał udostępniania (monotonic) albo None.
+        self._widac_od: Optional[float] = None
 
     def _biezacy(self) -> Optional[Odcinek]:
         if self.odcinki and self.odcinki[-1].koniec is None:
@@ -959,7 +1189,12 @@ class ObrazSpotkania:
         dostaje miejsce w nagraniu; proces, który sam się skończył (okno
         zamknięte, błąd kodera), zamyka odcinek z ostrzeżeniem.
         """
-        self._pilnuj_okna()
+        self._zapisz_wierzch()
+        self._pilnuj_udostepniania(pozycja)
+        if not self._ramka_widac and self._kandydat is None and self._udostepniane is None:
+            # W trakcie udostępniania Teams i Zoom chowają okno spotkania —
+            # pytanie „przełączyć na cały ekran?” nie ma wtedy sensu.
+            self._pilnuj_okna()
         odcinek = self._biezacy()
         if odcinek is None:
             return
@@ -992,7 +1227,81 @@ class ObrazSpotkania:
             self._schowane = schowane
             self._zmiana_okna(schowane)
 
-    def przelacz(self, zrodlo: ZrodloObrazu, pozycja: float, w_pauzie: bool = False) -> None:
+    def _zapisz_wierzch(self) -> None:
+        try:
+            hwnd = self._na_wierzchu()
+        except Exception:
+            return
+        if hwnd and (not self._wierzch or self._wierzch[-1][1] != hwnd):
+            self._wierzch.append((time.monotonic(), hwnd))
+
+    def _kandydaci_wierzchu(self) -> List[int]:
+        """Okna na wierzchu od chwili tuż przed pierwszym sygnałem, od najstarszego."""
+        if self._widac_od is None:
+            return []
+        od = self._widac_od - WIERZCH_PRZED_S
+        return [hwnd for chwila, hwnd in self._wierzch if chwila >= od]
+
+    def _pilnuj_udostepniania(self, pozycja: Callable[[float], float]) -> None:
+        """Ramka udostępniania pojawiła się, zmieniła albo zniknęła — obraz
+        sam idzie za tym, co udostępniasz, a po końcu wraca do źródła sprzed
+        udostępniania (zwykle okna spotkania).
+
+        Nagrywa się tylko to, co i tak widzą uczestnicy spotkania. Ręczny
+        wybór w trakcie udostępniania zostaje, dopóki ramka się nie zmieni.
+        """
+        teraz = time.monotonic()
+        if teraz - self._ostatnie_szukanie < CO_ILE_UDOSTEPNIANIE_S:
+            return
+        self._ostatnie_szukanie = teraz
+        try:
+            widac, zrodlo = self._szukaj_udostepniania(self._kandydaci_wierzchu())
+        except Exception:
+            return
+        self._ramka_widac = widac
+        if widac and self._widac_od is None:
+            self._widac_od = teraz
+            # Pierwszy odczyt nie znał jeszcze chwili startu — okno na wierzchu
+            # z ostatnich sekund od razu.
+            try:
+                widac, zrodlo = self._szukaj_udostepniania(self._kandydaci_wierzchu())
+            except Exception:
+                return
+        elif not widac:
+            self._widac_od = None
+        if widac and zrodlo is None:
+            return  # ramka jest, ale nie wiadomo czego — nic nie zmieniamy
+        klucz = klucz_zrodla(zrodlo)
+        if klucz != self._kandydat:
+            self._kandydat = klucz
+            return
+        if klucz == self._udostepniane:
+            return
+        if zrodlo is not None:
+            if self._udostepniane is None:
+                self._przed_udostepnieniem = self.zrodlo
+            self._udostepniane = klucz
+            self._udostepnianie(zrodlo)
+            if isinstance(zrodlo, Pytanie):
+                return  # okno programu pyta; wybór przyjdzie przez Nagrywarka.przelacz_obraz
+            if klucz_zrodla(self.zrodlo) != klucz:
+                self.przelacz(zrodlo, pozycja(time.perf_counter()), spotkanie=False)
+                self._zmiana_zrodla(zrodlo)
+            return
+        # Koniec udostępniania: z powrotem do źródła sprzed, jeśli jeszcze jest.
+        self._udostepniane = None
+        wroc = self._przed_udostepnieniem
+        self._przed_udostepnieniem = None
+        if wroc is None or not zrodlo_istnieje(wroc):
+            wroc = self.okno_spotkania if (self.okno_spotkania is not None and
+                                           okno_istnieje(self.okno_spotkania.hwnd)) else None
+        self._udostepnianie(None)
+        if wroc is not None and klucz_zrodla(wroc) != klucz_zrodla(self.zrodlo):
+            self.przelacz(wroc, pozycja(time.perf_counter()))
+            self._zmiana_zrodla(wroc)
+
+    def przelacz(self, zrodlo: ZrodloObrazu, pozycja: float, w_pauzie: bool = False,
+                 spotkanie: bool = True) -> None:
         """Inne źródło w trakcie nagrania: okno → cały ekran przy udostępnianiu
         i z powrotem.
 
@@ -1005,7 +1314,9 @@ class ObrazSpotkania:
         if stary is not None:
             stary.koniec = pozycja
         self.zrodlo = zrodlo
-        if isinstance(zrodlo, Okno):
+        # Okno udostępniane (spotkanie=False) to nie okno spotkania — po końcu
+        # udostępniania wracamy do tego, którego pilnujemy.
+        if isinstance(zrodlo, Okno) and spotkanie:
             self.okno_spotkania = zrodlo
             self._schowane = okno_schowane(zrodlo.hwnd)
         self._zgloszone_zamkniecie = False

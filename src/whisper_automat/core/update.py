@@ -1,8 +1,8 @@
 """Nowe wersje programu: z wydań (Releases) na GitHubie albo z folderu firmowego.
 
-Źródło wybiera wydanie: Papuga ma repozytorium (`wydanie.repo`) i pyta
-API GitHuba; Whisper Automat ma folder (`wydanie.aktualizacje_folder` —
-udział sieciowy w firmie albo adres http) i czyta z niego `najnowsza.json`.
+Źródło wybiera wydanie: publiczne ma repozytorium (`wydanie.repo`) i pyta
+API GitHuba; firmowe ma folder (`wydanie.aktualizacje_folder` — udział
+sieciowy w firmie albo adres http) i czyta z niego `najnowsza.json`.
 Wydanie bez jednego i drugiego nigdy tu nie zagląda. Mechanizm dalej jest
 jeden: ten sam pasek w oknie, to samo sprawdzenie podpisu Ed25519, ten
 sam cichy instalator. Z GitHuba do firmy nie trafia nic — adresy, klucz
@@ -55,7 +55,7 @@ from ..teksty import t
 from . import podpis as podpisy
 from .download import DownloadError, Plik, Postep, kopiuj_plik, pobierz_plik
 from .network import enable_system_certificates, opisz_blad_sieci
-from .wydanie import Wydanie, biezace
+from .wydanie import Wydanie, biezace, osiagalny_folder
 
 API = "https://api.github.com"
 
@@ -197,7 +197,8 @@ def _suma_podpisana(instalator: dict, zalaczniki: List[dict], wydanie: Wydanie) 
             "Wydanie nie ma pliku podpisu (.podpis), więc program nie zainstaluje go sam."
         ))
     tekst = _get(url, "application/octet-stream").decode("utf-8", "replace")
-    suma = podpisy.zweryfikuj_wydanie(tekst, wydanie.klucz_publiczny, nazwa)
+    suma = podpisy.zweryfikuj_wydanie(
+        tekst, wydanie.klucz_publiczny, nazwa, wydanie.naglowek_podpisu)
     digest = _digest(instalator)
     if digest and digest != suma:
         raise podpisy.BladPodpisu(t(
@@ -216,13 +217,13 @@ def sprawdz(obecna: str, wydanie: Optional[Wydanie] = None) -> Optional[Aktualiz
     wydanie = wydanie or biezace()
     if wydanie.repo:
         return _sprawdz_github(obecna, wydanie)
-    if wydanie.aktualizacje_folder:
+    if wydanie.foldery_aktualizacji:
         return _sprawdz_folder(obecna, wydanie)
     return None
 
 
 def _sprawdz_github(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
-    """Najnowsze wydanie z API GitHuba (Papuga)."""
+    """Najnowsze wydanie z API GitHuba (wydanie publiczne)."""
     enable_system_certificates()
     try:
         dane = json.loads(_get(f"{API}/repos/{wydanie.repo}/releases/latest"))
@@ -327,18 +328,19 @@ def _sprawdz_folder(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
     Folder niedostępny (laptop poza siecią firmową) to UpdateError — ręczne
     sprawdzenie powie o tym wprost, automatyczne zapisze w dzienniku. Folder
     pusty (nic jeszcze nie opublikowano) to po prostu brak nowej wersji.
+    Przy kilku folderach (przeprowadzka) liczy się pierwszy istniejący.
     """
-    folder = wydanie.aktualizacje_folder
-    if _jest_url(folder):
-        enable_system_certificates()
-    elif not Path(folder).is_dir():
-        # Windows zgłasza niedostępny udział tak samo jak brak pliku, więc
-        # sprawdzamy sam folder, zanim spytamy o plik.
+    # Windows zgłasza niedostępny udział tak samo jak brak pliku, więc
+    # sprawdzamy sam folder, zanim spytamy o plik.
+    folder = osiagalny_folder(wydanie.foldery_aktualizacji)
+    if not folder:
         raise UpdateError(t(
             "Ten komputer nie widzi folderu z aktualizacjami — pewnie jest poza siecią "
             "firmy. Program działa normalnie, a nowa wersja przyjdzie sama, gdy komputer "
             "wróci do sieci firmowej.\n\n{folder}"
-        ).format(folder=folder))
+        ).format(folder="\n".join(wydanie.foldery_aktualizacji)))
+    if _jest_url(folder):
+        enable_system_certificates()
     try:
         dane = json.loads(_czytaj_z_folderu(folder, MANIFEST).decode("utf-8"))
     except FileNotFoundError:
@@ -383,7 +385,8 @@ def _sprawdz_folder(obecna: str, wydanie: Wydanie) -> Optional[Aktualizacja]:
             raise podpisy.BladPodpisu(t(
                 "Wydanie nie ma pliku podpisu (.podpis), więc program nie zainstaluje go sam."
             )) from None
-        suma = podpisy.zweryfikuj_wydanie(tekst, wydanie.klucz_publiczny, nazwa)
+        suma = podpisy.zweryfikuj_wydanie(
+            tekst, wydanie.klucz_publiczny, nazwa, wydanie.naglowek_podpisu)
         akt.podpisana = True
     except Exception as exc:
         suma, akt.podpisana = "", False

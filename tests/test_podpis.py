@@ -75,9 +75,26 @@ class PlikPodpisu(unittest.TestCase):
         self.tekst = podpis.zapisz_podpis("Papuga-1.1.1-Setup.exe", self.SUMA, self.klucz)
 
     def test_zapis_i_odczyt(self):
-        self.assertTrue(self.tekst.startswith("papuga-podpis 1\nplik: Papuga-1.1.1-Setup.exe\n"))
+        self.assertTrue(self.tekst.startswith("podpis-wydania 1\nplik: Papuga-1.1.1-Setup.exe\n"))
         suma = podpis.zweryfikuj_wydanie(self.tekst, self.publiczny_hex, "Papuga-1.1.1-Setup.exe")
         self.assertEqual(suma, self.SUMA)
+
+    def test_naglowek_wydania(self):
+        # Wydanie publiczne podpisuje dalej nagłówkiem, który znają już
+        # zainstalowane wersje; program przyjmuje tylko nagłówek swojego wydania.
+        stary = "papuga-podpis 1"
+        tekst = podpis.zapisz_podpis("Papuga-1.1.1-Setup.exe", self.SUMA, self.klucz, stary)
+        self.assertTrue(tekst.startswith(stary + "\nplik: "))
+        self.assertEqual(podpis.zweryfikuj_wydanie(
+            tekst, self.publiczny_hex, "Papuga-1.1.1-Setup.exe", stary), self.SUMA)
+        with self.assertRaises(podpis.BladPodpisu):
+            podpis.zweryfikuj_wydanie(tekst, self.publiczny_hex, "Papuga-1.1.1-Setup.exe")
+        with self.assertRaises(podpis.BladPodpisu):
+            podpis.zweryfikuj_wydanie(self.tekst, self.publiczny_hex, "Papuga-1.1.1-Setup.exe", stary)
+        # Ten sam klucz, inny nagłówek — podpis i tak nie pasuje (nagłówek jest podpisany).
+        podmieniony = self.tekst.replace(podpis.NAGLOWEK, stary, 1)
+        with self.assertRaises(podpis.BladPodpisu):
+            podpis.zweryfikuj_wydanie(podmieniony, self.publiczny_hex, "Papuga-1.1.1-Setup.exe", stary)
 
     def test_inny_plik(self):
         with self.assertRaises(podpis.BladPodpisu):

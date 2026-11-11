@@ -15,7 +15,7 @@ Skąd słowa:
 
 Uruchomienie:
     .venv\\Scripts\\python.exe tools\\sprawdz_paczke.py                 # dist\\Papuga
-    .venv\\Scripts\\python.exe tools\\sprawdz_paczke.py dist\\WhisperAutomat
+    .venv\\Scripts\\python.exe tools\\sprawdz_paczke.py dist\\<Plik wydania>
 Kod wyjścia 1, gdy coś znaleziono.
 """
 

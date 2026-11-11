@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal
-title Whisper Automat — instalacja środowiska
+title Transkrypcja — instalacja środowiska
 cd /d "%~dp0"
 
 call :znajdz_pythona

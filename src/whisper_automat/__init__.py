@@ -1,20 +1,9 @@
-"""Whisper Automat / Papuga — szybka transkrypcja audio i wideo.
+"""Szybka transkrypcja audio i wideo offline.
 
-Jeden kod, dwa wydania — patrz core/wydanie.py.
+Jeden kod, dwa wydania — patrz core/wydanie.py. Wydawca, prawa autorskie
+i nazwa należą do wydania (`Wydanie.wydawca`, `Wydanie.prawa`), nie tutaj.
 """
 
-__version__ = "1.6.4"
-__author__ = "MATCODE"
-__company__ = "MATCODE"
-#: Podpis domyślny. Wydanie może mieć własny (Wydanie.wydawca) — ten
-#: pokazuje okno, właściwości pliku .exe i instalator.
-__publisher__ = "MATCODE"
-__copyright__ = "© 2026 MATCODE"
+__version__ = "1.6.6"
 
-__all__ = [
-    "__version__",
-    "__author__",
-    "__company__",
-    "__publisher__",
-    "__copyright__",
-]
+__all__ = ["__version__"]

@@ -1,25 +1,26 @@
-; Instalator programu — wydanie firmowe (Whisper Automat) albo publiczne
-; (Papuga). Wywoływany przez tools/build_exe.py, który podaje nazwę,
-; identyfikator i ścieżki przez /D...
+; Instalator programu — wydanie firmowe albo publiczne. Wywoływany przez
+; tools/build_exe.py, który podaje nazwę, identyfikator, wydawcę i ścieżki
+; przez /D... z danych wydania (pakiet src/whisper_automat/wydania). Ten
+; plik nie zna nazw ani marek wydań — bez nich kompilacja staje.
 
 #ifndef AppVersion
   #define AppVersion "1.0.0"
 #endif
 #ifndef AppName
-  #define AppName "Whisper Automat"
+  #error Brak /DAppName - instalator buduje tools/build_exe.py.
 #endif
 ; Nazwa techniczna: plik .exe i katalog danych w %LOCALAPPDATA%.
 #ifndef AppFullName
   #define AppFullName AppName
 #endif
 #ifndef AppFile
-  #define AppFile "WhisperAutomat"
+  #error Brak /DAppFile - instalator buduje tools/build_exe.py.
 #endif
 ; Identyfikator bez nawiasów klamrowych. To on decyduje, czy Windows uznaje
 ; instalację za tę samą aplikację — każde wydanie ma własny, więc wydanie
 ; firmowe i publiczne mogą stać obok siebie.
 #ifndef AppGuid
-  #define AppGuid "7C2F1A64-5D3B-4E82-9A17-6B0E4C9D2F31"
+  #error Brak /DAppGuid - instalator buduje tools/build_exe.py.
 #endif
 #ifndef SourceDir
   #define SourceDir "..\dist\" + AppFile
@@ -40,7 +41,7 @@
 #endif
 ; 1 = instalacja dla bieżącego użytkownika, bez uprawnień administratora
 ; (od 2026-10-09 oba wydania; do 1.3.0 wydanie firmowe szło do Program
-; Files). Papuga aktualizuje się sama, a bez tego każda aktualizacja
+; Files). Program aktualizuje się sam, a bez tego każda aktualizacja
 ; pytałaby o zgodę administratora; w firmie pracownik hasła administratora
 ; nie ma wcale. 0 = domyślnie dla wszystkich użytkowników (Program Files).
 #ifndef PerUser
@@ -164,9 +165,10 @@ Filename: "{app}\{#AppExe}"; \
     Flags: nowait runasoriginaluser; Check: PoAktualizacji
 
 [InstallDelete]
-; Do 1.6.2 wydanie firmowe dostawało LICENSE.txt (MIT z marką MATCODE),
-; a aktualizacja nie zdejmuje plików, których nowa paczka nie ma. Papuga
-; dostaje go z powrotem z [Files] — usuwanie idzie przed kopiowaniem.
+; Do 1.6.2 wydanie firmowe dostawało LICENSE.txt (licencja MIT wydania
+; publicznego), a aktualizacja nie zdejmuje plików, których nowa paczka
+; nie ma. Wydanie publiczne dostaje go z powrotem z [Files] — usuwanie
+; idzie przed kopiowaniem.
 Type: files; Name: "{app}\LICENSE.txt"
 
 [UninstallDelete]

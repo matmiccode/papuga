@@ -79,7 +79,7 @@ def info(text: str) -> None:
 
 def header() -> None:
     print("=" * 70)
-    print("  WHISPER AUTOMAT — instalacja środowiska")
+    print("  Instalacja środowiska programu")
     print("=" * 70)
     print(f"  Katalog projektu: {PROJECT_ROOT}")
 
@@ -390,7 +390,7 @@ def verify() -> bool:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="setup",
-        description="Instaluje środowisko Whisper Automat.",
+        description="Instaluje środowisko programu (.venv z zależnościami).",
     )
     parser.add_argument("--cpu", action="store_true",
                         help="Wymuś konfigurację bez CUDA.")

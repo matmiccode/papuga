@@ -8,7 +8,7 @@ dostaje imię jako podpowiedź.
 
 Zasady (decyzja autora 2026-10-15 po analizie prawnej w dokumentacja/technika.md):
 
-* Tylko wydanie firmowe — Papuga nie ma tego modułu w interfejsie
+* Tylko wydanie firmowe — publiczne nie ma tego modułu w interfejsie
   (`dostepna()` daje False). Odcisk głosu to dane biometryczne (RODO art. 9),
   a rozpoznawanie przez porównanie z bazą to „identyfikacja biometryczna”
   w rozumieniu AI Act; w firmie decyduje inspektor ochrony danych.
@@ -42,7 +42,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from .wydanie import biezace
+from .wydanie import biezace, jest_url, osiagalny_folder
 from ..teksty import t
 
 WERSJA = 1
@@ -90,27 +90,36 @@ class Glos:
 # ---------------------------------------------------------------------------
 
 
+def _foldery() -> Tuple[str, ...]:
+    """Foldery aktualizacji, w których może leżeć baza (bez adresów http —
+    tam program nie zapisze). Puste poza wydaniem firmowym."""
+    wyd = biezace()
+    if wyd.kod != "firma":
+        return ()
+    return tuple(f for f in wyd.foldery_aktualizacji if not jest_url(f))
+
+
 def katalog() -> Optional[Path]:
     """Folder bazy: zmienna (testy) albo `<folder aktualizacji>\\Glosy`.
 
-    None, gdy wydanie nie jest firmowe albo folder aktualizacji to adres
-    http (tam program nie zapisze) lub go nie ma.
+    Przy przeprowadzce folderu (nowy i stary) — pierwszy istniejący, jak
+    w aktualizacjach; gdy żaden nie odpowiada, nowy (błąd powie, gdzie
+    szukano). Sprawdza udział, więc nie z wątku okna. None, gdy wydanie
+    nie jest firmowe albo nie ma folderu na dysku czy udziale.
     """
     ze_zmiennej = os.environ.get(ZMIENNA, "").strip()
     if ze_zmiennej:
         return Path(ze_zmiennej)
-    wyd = biezace()
-    if wyd.kod != "firma":
+    foldery = _foldery()
+    if not foldery:
         return None
-    folder = (wyd.aktualizacje_folder or "").strip()
-    if not folder or folder.lower().startswith(("http://", "https://")):
-        return None
-    return Path(folder) / PODFOLDER
+    return Path(osiagalny_folder(foldery) or foldery[0]) / PODFOLDER
 
 
 def dostepna() -> bool:
-    """Czy to wydanie ma bazę głosów (nie: czy folder jest w tej chwili osiągalny)."""
-    return katalog() is not None
+    """Czy to wydanie ma bazę głosów (nie: czy folder jest w tej chwili
+    osiągalny — tego nie sprawdza, więc wolno pytać z wątku okna)."""
+    return bool(os.environ.get(ZMIENNA, "").strip() or _foldery())
 
 
 def login() -> str:

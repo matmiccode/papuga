@@ -51,7 +51,7 @@ def _bez_konsoli() -> bool:
 
     Spakowana wersja jest budowana jako aplikacja okienkowa (--windowed),
     więc uruchomiona ze skrótu nie ma żadnego standardowego wyjścia.
-    Ale gdy ktoś przekieruje wynik do pliku (`WhisperAutomat.exe --doctor
+    Ale gdy ktoś przekieruje wynik do pliku (`<Program>.exe --doctor
     > raport.txt`), uchwyt jest prawidłowy — i właśnie tam ma pójść raport.
     Wcześniej program porywał konsolę nadrzędną także w tym przypadku
     i plik zostawał pusty.
@@ -64,7 +64,7 @@ def _bez_konsoli() -> bool:
 def _przejmij_konsole() -> bool:
     """Podpina się pod konsolę procesu nadrzędnego, jeśli jakaś jest.
 
-    Dzięki temu `WhisperAutomat.exe --cli plik.mp4` uruchomione z wiersza
+    Dzięki temu `<Program>.exe --cli plik.mp4` uruchomione z wiersza
     poleceń pisze tam, gdzie użytkownik tego oczekuje.
     """
     if os.name != "nt":

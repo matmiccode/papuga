@@ -16,12 +16,13 @@ potwierdzają wektory testowe w tests/test_podpis.py.
 
 Plik podpisu wydania (`<instalator>.podpis`) to tekst:
 
-    papuga-podpis 1
-    plik: Papuga-1.1.1-Setup.exe
+    podpis-wydania 1
+    plik: Program-1.1.1-Setup.exe
     sha256: <64 znaki szesnastkowe>
     podpis: <base64, 64 bajty>
 
-Podpisane są pierwsze trzy linie — nazwa pliku i suma. Program najpierw
+Pierwsza linia to nagłówek wydania (`Wydanie.naglowek_podpisu`): program
+przyjmuje tylko swój. Podpisane są pierwsze trzy linie — nazwa pliku i suma. Program najpierw
 sprawdza podpis, a dopiero potem pobiera instalator i porównuje jego sumę
 z podpisaną. Bez prawidłowego podpisu nie uruchamia niczego.
 """
@@ -173,7 +174,8 @@ def sprawdz(klucz_publiczny_: bytes, wiadomosc: bytes, podpis: bytes) -> bool:
 
 # --- plik podpisu wydania ---------------------------------------------------
 
-NAGLOWEK = "papuga-podpis 1"
+#: Nagłówek domyślny; wydanie może mieć własny (`Wydanie.naglowek_podpisu`).
+NAGLOWEK = "podpis-wydania 1"
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -188,25 +190,26 @@ class Podpis:
     podpis: bytes
 
 
-def tresc_do_podpisu(plik: str, sha256: str) -> bytes:
-    return f"{NAGLOWEK}\nplik: {plik}\nsha256: {sha256.lower()}\n".encode("utf-8")
+def tresc_do_podpisu(plik: str, sha256: str, naglowek: str = NAGLOWEK) -> bytes:
+    return f"{naglowek}\nplik: {plik}\nsha256: {sha256.lower()}\n".encode("utf-8")
 
 
-def zapisz_podpis(plik: str, sha256: str, klucz_prywatny: bytes) -> str:
+def zapisz_podpis(plik: str, sha256: str, klucz_prywatny: bytes,
+                  naglowek: str = NAGLOWEK) -> str:
     """Treść pliku `<instalator>.podpis`."""
     if not _HEX64.match(sha256.lower()):
         raise ValueError("Suma SHA-256 ma mieć 64 znaki szesnastkowe.")
     if "\n" in plik or not plik.strip():
         raise ValueError("Nieprawidłowa nazwa pliku.")
-    tresc = tresc_do_podpisu(plik, sha256)
+    tresc = tresc_do_podpisu(plik, sha256, naglowek)
     podpis = podpisz(klucz_prywatny, tresc)
     return tresc.decode("utf-8") + f"podpis: {base64.b64encode(podpis).decode('ascii')}\n"
 
 
-def odczytaj_podpis(tekst: str) -> Podpis:
+def odczytaj_podpis(tekst: str, naglowek: str = NAGLOWEK) -> Podpis:
     pola = {}
     linie = [linia.strip() for linia in tekst.strip().splitlines() if linia.strip()]
-    if not linie or linie[0] != NAGLOWEK:
+    if not linie or linie[0] != naglowek:
         raise BladPodpisu("To nie jest plik podpisu wydania (brak nagłówka).")
     for linia in linie[1:]:
         klucz, sep, wartosc = linia.partition(":")
@@ -225,7 +228,8 @@ def odczytaj_podpis(tekst: str) -> Podpis:
     return Podpis(plik=plik, sha256=suma, podpis=podpis)
 
 
-def zweryfikuj_wydanie(tekst: str, klucz_publiczny_hex: str, oczekiwany_plik: str) -> str:
+def zweryfikuj_wydanie(tekst: str, klucz_publiczny_hex: str, oczekiwany_plik: str,
+                       naglowek: str = NAGLOWEK) -> str:
     """Sprawdza plik podpisu i zwraca podpisaną sumę SHA-256 instalatora.
 
     Rzuca BladPodpisu, gdy podpis nie pasuje do klucza, dotyczy innego pliku
@@ -237,12 +241,12 @@ def zweryfikuj_wydanie(tekst: str, klucz_publiczny_hex: str, oczekiwany_plik: st
         raise BladPodpisu("Program ma nieprawidłowy klucz publiczny wydań.") from exc
     if len(klucz) != 32:
         raise BladPodpisu("Program ma nieprawidłowy klucz publiczny wydań.")
-    dane = odczytaj_podpis(tekst)
+    dane = odczytaj_podpis(tekst, naglowek)
     if dane.plik != oczekiwany_plik:
         raise BladPodpisu(
             f"Podpis dotyczy pliku {dane.plik}, a wydanie zawiera {oczekiwany_plik}."
         )
-    if not sprawdz(klucz, tresc_do_podpisu(dane.plik, dane.sha256), dane.podpis):
+    if not sprawdz(klucz, tresc_do_podpisu(dane.plik, dane.sha256, naglowek), dane.podpis):
         raise BladPodpisu(
             "Podpis wydania nie zgadza się z kluczem wbudowanym w program. "
             "Instalator nie zostanie uruchomiony."

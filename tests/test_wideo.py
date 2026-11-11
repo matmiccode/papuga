@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -153,6 +154,251 @@ class PodgladTest(unittest.TestCase):
 
 
 @unittest.skipUnless(FFMPEG and FFPROBE, "brak ffmpeg")
+class UdostepnianieTest(unittest.TestCase):
+    """Prostokąty z sondy 2026-11-03 (nowy Teams, dwa monitory)."""
+
+    def setUp(self):
+        self.m1 = W.Ekran(11, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True)
+        self.m2 = W.Ekran(22, "\\\\.\\DISPLAY2", 2, 1920, 1080, x=1920, y=7)
+        self.radio = W.Okno(9, "radioMAT", "Radiomat.exe", 430, 560, x=2665, y=243)
+        self.teams = W.Okno(5, "Meeting with X | Microsoft Teams", "ms-teams.exe", 1320, 825,
+                            x=2193, y=117)
+        self.max = W.Okno(7, "Poczta - Google Chrome", "chrome.exe", 1936, 1096, x=1912, y=-1)
+
+    def test_caly_ekran(self):
+        ekrany, okna = [self.m1, self.m2], [self.radio, self.teams]
+        self.assertIs(W.rozpoznaj_udostepnianie((0, 0, 1920, 1080), ekrany, okna), self.m1)
+        self.assertIs(W.rozpoznaj_udostepnianie((1920, 7, 3840, 1087), ekrany, okna), self.m2)
+
+    def test_jedno_okno(self):
+        # Ramka Teams jest o kilka pikseli mniejsza niż GetWindowRect okna.
+        ramka = (2672, 243, 3088, 796)
+        self.assertIs(W.rozpoznaj_udostepnianie(ramka, [self.m1, self.m2],
+                                                [self.teams, self.radio]), self.radio)
+
+    def test_zoom(self):
+        # Warstwa adnotacji Zooma: na monitor 2, na okno Eksploratora, a przez
+        # pierwsze sekundy 10×10 w (0,0) — wtedy nic.
+        ekrany = [self.m1, self.m2]
+        eksplorator = W.Okno(3, "Pobrane — Eksplorator plików", "explorer.exe", 1062, 634,
+                             x=2652, y=197)
+        okna = [self.teams, eksplorator]
+        self.assertIs(W.rozpoznaj_udostepnianie((1920, 7, 3840, 1087), ekrany, okna), self.m2)
+        self.assertIs(W.rozpoznaj_udostepnianie((2652, 197, 3714, 831), ekrany, okna),
+                      eksplorator)
+        self.assertIsNone(W.rozpoznaj_udostepnianie((0, 0, 10, 10), ekrany, okna))
+        self.assertIn(("zoom.exe", "ZoomAnnoWindowWndClass"), W.RAMKI_UDOSTEPNIANIA)
+
+    def test_monitor_wygrywa_z_oknem_zmaksymalizowanym(self):
+        self.assertIs(W.rozpoznaj_udostepnianie((1920, 7, 3840, 1087), [self.m1, self.m2],
+                                                [self.max]), self.m2)
+
+    def test_nic_nie_pasuje(self):
+        zminimalizowane = W.Okno(9, "radioMAT", "Radiomat.exe", 430, 560, True, 2665, 243)
+        self.assertIsNone(W.rozpoznaj_udostepnianie((100, 100, 500, 400), [self.m1], [self.radio]))
+        self.assertIsNone(W.rozpoznaj_udostepnianie((2672, 243, 3088, 796), [self.m1],
+                                                    [zminimalizowane]))
+
+    def test_klucz(self):
+        self.assertEqual(W.klucz_zrodla(self.m2), W.klucz_zrodla(W.Ekran(99, self.m2.urzadzenie,
+                                                                         2, 1920, 1080)))
+        self.assertNotEqual(W.klucz_zrodla(self.radio), W.klucz_zrodla(self.teams))
+        self.assertIsNone(W.klucz_zrodla(None))
+
+
+class BezFfmpeg(W.ObrazSpotkania):
+    """Przełączanie bez procesów ffmpeg: odcinki tylko zapisane jako źródła."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.nagrywane = [self.zrodlo]
+
+    def ruszaj(self, poczatek):
+        self.nagrywane.append(self.zrodlo)
+
+
+class SamoPrzelaczanieTest(unittest.TestCase):
+    """Ramka pojawia się i znika — obraz idzie za udostępnianiem i wraca."""
+
+    def setUp(self):
+        self.teams = W.Okno(5, "Meeting | Microsoft Teams", "ms-teams.exe", 1320, 825)
+        self.m1 = W.Ekran(11, "\\\\.\\DISPLAY1", 1, 1920, 1080, glowny=True)
+        self.radio = W.Okno(9, "radioMAT", "Radiomat.exe", 430, 560)
+        self.odczyt = (False, None)
+        self.zdarzenia = []
+        self.schowane = False
+        for nazwa, wartosc in (("CO_ILE_UDOSTEPNIANIE_S", 0),
+                               ("rozmiar_obrazu", lambda _h: (1320, 824)),
+                               ("okno_istnieje", lambda _h: True),
+                               ("zrodlo_istnieje", lambda _z: True),
+                               ("okno_schowane", lambda _h: self.schowane)):
+            lata = mock.patch.object(W, nazwa, wartosc)
+            lata.start()
+            self.addCleanup(lata.stop)
+        self.obraz = BezFfmpeg(
+            self.teams, Path("x.flac"), "ffmpeg",
+            zmiana_okna=lambda s: self.zdarzenia.append(("okno", s)),
+            udostepnianie=lambda z: self.zdarzenia.append(("udostepnia", W.klucz_zrodla(z))),
+            zmiana_zrodla=lambda z: self.zdarzenia.append(("obraz", W.klucz_zrodla(z))),
+            szukaj_udostepniania=lambda *_: self.odczyt)
+
+    def krok(self, odczyt, ile=1):
+        self.odczyt = odczyt
+        for _ in range(ile):
+            self.obraz.dogon(lambda _perf: 1.0)
+
+    def test_caly_ekran_i_powrot(self):
+        self.krok((False, None), 2)
+        self.assertEqual(self.zdarzenia, [])
+        # Jeden odczyt to za mało (ramka mignęła), drugi taki sam — przełączenie.
+        self.krok((True, self.m1))
+        self.assertEqual(self.zdarzenia, [])
+        self.krok((True, self.m1))
+        self.assertEqual(self.zdarzenia, [("udostepnia", ("ekran", self.m1.urzadzenie)),
+                                          ("obraz", ("ekran", self.m1.urzadzenie))])
+        self.assertIs(self.obraz.zrodlo, self.m1)
+        # Ramka jest, ale nie wiadomo czego — nic się nie zmienia.
+        self.krok((True, None), 3)
+        self.assertEqual(len(self.zdarzenia), 2)
+        # Koniec udostępniania — z powrotem do okna spotkania.
+        self.krok((False, None), 2)
+        self.assertEqual(self.zdarzenia[2:], [("udostepnia", None), ("obraz", ("okno", 5))])
+        self.assertIs(self.obraz.zrodlo, self.teams)
+        self.assertEqual([W.klucz_zrodla(z) for z in self.obraz.nagrywane],
+                         [("okno", 5), ("ekran", self.m1.urzadzenie), ("okno", 5)])
+
+    def test_jedno_okno_nie_zostaje_oknem_spotkania(self):
+        self.krok((True, self.radio), 2)
+        self.assertIs(self.obraz.zrodlo, self.radio)
+        self.assertIs(self.obraz.okno_spotkania, self.teams)
+        # Teams minimalizuje okno spotkania — przy udostępnianiu bez pytania.
+        self.schowane = True
+        self.krok((True, self.radio), 2)
+        self.assertNotIn(("okno", True), self.zdarzenia)
+        # Zmiana z okna na cały ekran w trakcie, potem koniec.
+        self.krok((True, self.m1), 2)
+        self.assertIs(self.obraz.zrodlo, self.m1)
+        self.schowane = False
+        self.krok((False, None), 2)
+        self.assertIs(self.obraz.zrodlo, self.teams)
+        self.assertEqual(self.zdarzenia[-2:], [("udostepnia", None), ("obraz", ("okno", 5))])
+
+    def test_udostepniane_to_samo_co_nagrywane(self):
+        obraz = BezFfmpeg(self.m1, Path("x.flac"), "ffmpeg",
+                          udostepnianie=lambda z: self.zdarzenia.append(("udostepnia", z)),
+                          zmiana_zrodla=lambda z: self.zdarzenia.append(("obraz", z)),
+                          szukaj_udostepniania=lambda *_: self.odczyt)
+        self.odczyt = (True, W.Ekran(77, self.m1.urzadzenie, 1, 1920, 1080))
+        for _ in range(3):
+            obraz.dogon(lambda _perf: 1.0)
+        self.assertEqual([z[0] for z in self.zdarzenia], ["udostepnia"])
+        self.assertEqual(len(obraz.nagrywane), 1)
+
+    def test_zoom_chowa_okno_zanim_ramka_ma_rozmiar(self):
+        # Zoom chowa okno spotkania, a ramka przez kilka sekund jest 10×10 —
+        # bez pytania o cały ekran, potem samo przełączenie.
+        self.schowane = True
+        self.krok((True, None), 4)
+        self.assertEqual(self.zdarzenia, [])
+        self.krok((True, self.m1), 2)
+        self.assertEqual([z[0] for z in self.zdarzenia], ["udostepnia", "obraz"])
+        self.assertIs(self.obraz.zrodlo, self.m1)
+
+    def test_meet_ekran_przy_kilku_monitorach_pyta(self):
+        # Pasek „udostępnia Twój ekran”, dwa monitory: pytanie, bez przełączania;
+        # wybór z dymku (ręczny), po końcu powrót do okna spotkania.
+        self.krok((True, W.Pytanie("ekran")), 2)
+        self.assertEqual(self.zdarzenia, [("udostepnia", ("pytanie", "ekran"))])
+        self.assertIs(self.obraz.zrodlo, self.teams)
+        self.obraz.przelacz(self.m1, 5.0)
+        self.krok((True, W.Pytanie("ekran")), 2)
+        self.assertIs(self.obraz.zrodlo, self.m1)
+        self.krok((False, None), 2)
+        self.assertIs(self.obraz.zrodlo, self.teams)
+        self.assertEqual(self.zdarzenia[-2:], [("udostepnia", None), ("obraz", ("okno", 5))])
+
+    def test_meet_okno_z_wierzchu(self):
+        # Okno wychodzi na wierzch po pasku; szukanie dostaje okna z wierzchu
+        # od chwili tuż przed pierwszym sygnałem.
+        wierzch = {"h": 5}
+        dostal = []
+
+        def szukaj(kolejno):
+            dostal.append(list(kolejno))
+            if not self.pasek:
+                return False, None
+            return True, (self.radio if 9 in kolejno else W.Pytanie("okno"))
+
+        self.pasek = False
+        obraz = BezFfmpeg(self.teams, Path("x.flac"), "ffmpeg",
+                          udostepnianie=lambda z: self.zdarzenia.append(("udostepnia", z)),
+                          zmiana_zrodla=lambda z: self.zdarzenia.append(("obraz", z)),
+                          szukaj_udostepniania=szukaj, na_wierzchu=lambda: wierzch["h"])
+        obraz.dogon(lambda _p: 1.0)
+        self.pasek = True
+        obraz.dogon(lambda _p: 1.0)      # pasek jest, okno jeszcze nie na wierzchu
+        wierzch["h"] = 9
+        obraz.dogon(lambda _p: 1.0)      # Eksplorator na wierzchu — kandydat
+        wierzch["h"] = 2                 # podgląd Meet zabiera wierzch
+        obraz.dogon(lambda _p: 1.0)      # drugi zgodny odczyt — przełączenie
+        self.assertIs(obraz.zrodlo, self.radio)
+        self.assertIn(9, dostal[-1])
+        self.assertNotIn(("udostepnia", W.Pytanie("okno")), self.zdarzenia)
+
+    def test_bez_udostepniania_dawne_pytanie_zostaje(self):
+        # Zoom bez ramki chowa okno — jak dotąd: zmiana_okna i dymek z pytaniem.
+        self.schowane = True
+        self.krok((False, None), 2)
+        self.assertEqual(self.zdarzenia, [("okno", True)])
+
+
+class DymekTest(unittest.TestCase):
+    def test_polozenie(self):
+        from whisper_automat import dymek as D
+
+        # Drugi monitor z paskiem zadań na dole: u góry na środku…
+        obszar = (1920, 7, 3840, 1047)
+        x, y = D.polozenie(obszar, 520, 300, srodek=True)
+        self.assertEqual(x, 1920 + (1920 - 520) // 2)
+        self.assertEqual(y, 7 + int(1040 * D.OD_GORY))
+        # …albo w prawym dolnym rogu, gdy dymek widać w udostępnianiu.
+        self.assertEqual(D.polozenie(obszar, 520, 300, srodek=False),
+                         (3840 - 520 - D.MARGINES, 1047 - 300 - D.MARGINES))
+        # Dymek szerszy niż ekran — od lewej krawędzi, nie poza nią.
+        self.assertEqual(D.polozenie((0, 0, 400, 300), 520, 200, srodek=True)[0], 0)
+
+
+class MeetTest(unittest.TestCase):
+    """Google Meet w Chrome (sonda 2026-11-03): pasek zamiast ramki."""
+
+    def test_rodzaj_paska(self):
+        self.assertEqual(W.rodzaj_paska("Aplikacja meet.google.com udostępnia Twój ekran."),
+                         "ekran")
+        self.assertEqual(W.rodzaj_paska("meet.google.com udostępnia okno."), "okno")
+        self.assertEqual(W.rodzaj_paska("meet.google.com is sharing your screen."), "ekran")
+        self.assertEqual(W.rodzaj_paska("meet.google.com is sharing a window."), "okno")
+        self.assertIsNone(W.rodzaj_paska("Meet – kbf-moic-dix - Google Chrome"))
+        self.assertIsNone(W.rodzaj_paska("Poczta - Google Chrome"))
+
+    def test_okno_z_wierzchu(self):
+        meet = W.Okno(1, "Meet – kbf-moic-dix - Google Chrome", "chrome.exe", 1936, 1048)
+        podglad = W.Okno(2, "Meet – kbf-moic-dix", "chrome.exe", 316, 398)
+        eksplorator = W.Okno(3, "radioMAT-stacje — Eksplorator plików", "explorer.exe", 1076, 641)
+        notatnik = W.Okno(4, "Notatki — Notatnik", "notepad.exe", 800, 600)
+        okna = [meet, podglad, eksplorator, notatnik]
+        # Kolejność z sondy: Meet, (okno wyboru Chrome — już zamknięte), Eksplorator,
+        # podgląd Meet, potem użytkownik kliknął Notatnik — zostaje Eksplorator.
+        self.assertIs(W.okno_z_wierzchu([1, 99, 3, 2, 4], okna), eksplorator)
+        self.assertIsNone(W.okno_z_wierzchu([1, 2], okna))
+        zminimalizowany = W.Okno(3, "radioMAT", "explorer.exe", 1076, 641, True)
+        self.assertIs(W.okno_z_wierzchu([3, 4], [zminimalizowany, notatnik]), notatnik)
+
+    def test_klucz_pytania(self):
+        self.assertEqual(W.klucz_zrodla(W.Pytanie("ekran")), ("pytanie", "ekran"))
+        self.assertNotEqual(W.klucz_zrodla(W.Pytanie("ekran")),
+                            W.klucz_zrodla(W.Pytanie("okno")))
+
+
 class SkladanieTest(unittest.TestCase):
     def setUp(self):
         self.katalog = Path(tempfile.mkdtemp(prefix="test-wideo-"))

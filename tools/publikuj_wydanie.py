@@ -1,5 +1,5 @@
-"""Wystawia zbudowany instalator jako wydanie: Papugę na GitHubie, Whisper
-Automat w folderze firmowym (udział sieciowy).
+"""Wystawia zbudowany instalator jako wydanie: Papugę na GitHubie, wydanie
+firmowe w folderze firmowym (udział sieciowy).
 
 Papuga:
     .venv\\Scripts\\python.exe tools\\build_exe.py --wydanie papuga
@@ -11,7 +11,7 @@ Firma:
 
 Wspólne dla obu:
   1. znajduje instalator w dist/ (Papuga: lekki `Papuga-<wersja>-Setup.exe`,
-     firma: `WhisperAutomat-<wersja>-Setup-offline.exe` albo inny wariant),
+     firma: `<Plik>-<wersja>-Setup-offline.exe` albo inny wariant),
   2. liczy SHA-256 i zapisuje go obok jako `<instalator>.sha256`,
   3. podpisuje nazwę i sumę kluczem autora (tools/klucz_wydan.py) do pliku
      `<instalator>.podpis` — bez niego program u ludzi nie zainstaluje
@@ -25,7 +25,8 @@ wyłącznie wydania opublikowane, więc szkic nikomu niczego nie zaproponuje.
 Potrzebny jest `gh` zalogowany na konto właściciela repozytorium, `matmiccode`.
 
 Firma: kopiuje pliki do folderu z tools/aktualizacje_firmy.local.txt (albo
---folder, albo WHISPER_AUTOMAT_AKTUALIZACJE): najpierw instalator pod
+--folder, albo WHISPER_AUTOMAT_AKTUALIZACJE; przy kilku wierszach — do
+pierwszego istniejącego, jak program u ludzi): najpierw instalator pod
 tymczasową nazwą (po skopiowaniu suma jest liczona jeszcze raz, z udziału),
 potem suma i podpis, na końcu `najnowsza.json` — program u ludzi widzi nową
 wersję dopiero, gdy wszystko leży na miejscu. Starsze instalatory z folderu
@@ -60,10 +61,49 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from whisper_automat.core import podpis, update  # noqa: E402
-from whisper_automat.core.wydanie import WYDANIA, Wydanie  # noqa: E402
+from whisper_automat.core.wydanie import (  # noqa: E402
+    WYDANIA, Wydanie, jest_url, osiagalny_folder,
+)
 
-KLUCZ_DOMYSLNY = Path(os.environ.get("PAPUGA_KLUCZ_WYDAN")
-                      or Path.home() / ".matcode" / "papuga-klucz-wydan.txt")
+#: Klucze prywatne wydań leżą poza repozytorium; skrypt czyta je tylko do
+#: podpisu, nigdy nie wypisuje. Kopia w menedżerze haseł autora.
+KATALOG_KLUCZY = Path.home() / ".matcode"
+KLUCZE = {
+    "papuga": Path(os.environ.get("PAPUGA_KLUCZ_WYDAN")
+                   or KATALOG_KLUCZY / "papuga-klucz-wydan.txt"),
+    # Własny klucz firmowy od 1.6.7 (1.6.6 ma go w sobie, ale samo jest
+    # podpisane jeszcze kluczem wspólnym z Papugą — PRZEJSCIA niżej).
+    "firma": KATALOG_KLUCZY / "whisper-firma-klucz-wydan.txt",
+}
+
+#: Jak podpisać wydanie, żeby przyjęły je programy JUŻ zainstalowane. Zwykle
+#: tak, jak sprawdza wydanie z kodu (klucz i nagłówek z `Wydanie`). Wersja
+#: przejściowa — ta, która wprowadza nowy klucz albo nagłówek — podpisuje się
+#: jeszcze po staremu, bo instalować ją będzie poprzednia wersja. Tak samo
+#: sprawdza ją skrypt po publikacji i przy przywracaniu z kopii.
+PRZEJSCIA = {
+    # 1.6.6 firma: wydanie bez śladów marki publicznej, z własnym nagłówkiem
+    # i własnym kluczem (sprawdza nimi 1.6.7+); 1.6.5 zna tylko nagłówek
+    # i klucz wspólne z Papugą, więc 1.6.6 podpisuje się jeszcze nimi.
+    ("firma", "1.6.6"): dict(
+        klucz_publiczny="5889fe93bba0dc4ee0df9a4be7c5f3ad908cce307f7d664f0046773f335656b4",
+        naglowek_podpisu="papuga-podpis 1",
+        plik_klucza=KATALOG_KLUCZY / "papuga-klucz-wydan.txt",
+    ),
+}
+
+
+def jak_podpisac(wyd: Wydanie, ver: str) -> tuple[Wydanie, Path]:
+    """Wydanie z kluczem i nagłówkiem, które przyjmą zainstalowane programy,
+    i plik klucza prywatnego do podpisu."""
+    przejscie = PRZEJSCIA.get((wyd.kod, ver))
+    if przejscie is None:
+        return wyd, KLUCZE[wyd.kod]
+    print(f"  wersja przejściowa {ver}: podpis tak, jak oczekuje poprzednia wersja "
+          f"(nagłówek „{przejscie['naglowek_podpisu']}”)")
+    return (replace(wyd, klucz_publiczny=przejscie["klucz_publiczny"],
+                    naglowek_podpisu=przejscie["naglowek_podpisu"]),
+            przejscie["plik_klucza"])
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
@@ -109,24 +149,37 @@ def znajdz_instalator(wyd: Wydanie, ver: str) -> Path:
 
 
 def folder_firmy(podany: Optional[Path]) -> Path:
+    """--folder, a bez niego pierwszy istniejący folder z listy (zmienna albo
+    plik lokalny). Przy przeprowadzce lista ma nowy i stary folder: póki
+    nowego nie ma, publikacja idzie do starego — tam, gdzie patrzą
+    zainstalowane programy."""
     if podany:
         return podany
-    ze_srodowiska = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
-    if ze_srodowiska:
-        return Path(ze_srodowiska)
-    try:
-        tekst = PLIK_FOLDERU.read_text(encoding="utf-8").strip()
-    except OSError:
-        tekst = ""
+    tekst = os.environ.get("WHISPER_AUTOMAT_AKTUALIZACJE", "").strip()
     if not tekst:
+        try:
+            tekst = PLIK_FOLDERU.read_text(encoding="utf-8").strip()
+        except OSError:
+            tekst = ""
+    foldery = replace(WYDANIA["firma"], aktualizacje_folder=tekst).foldery_aktualizacji
+    if not foldery:
         raise SystemExit(
             f"Nie wiem, dokąd publikować: brak {PLIK_FOLDERU.name} i --folder.\n"
-            f"  Wpisz do pliku ścieżkę udziału, np. \\\\serwer\\udzial\\Whisper Automat"
+            f"  Wpisz do pliku ścieżkę udziału, np. \\\\serwer\\udzial\\<Program>"
         )
-    if tekst.lower().startswith(("http://", "https://")):
+    folder = osiagalny_folder(foldery)
+    if not folder:
+        # Także po awarii serwera (--przywroc): przy kilku folderach to autor
+        # decyduje, który założyć od nowa.
+        raise SystemExit("Żaden folder aktualizacji nie odpowiada (sieć firmy? awaria?):\n  "
+                         + "\n  ".join(foldery)
+                         + '\n  Żeby założyć go od nowa, podaj go wprost: --folder "<ścieżka>"')
+    if jest_url(folder):
         raise SystemExit("Publikacja na serwer http wymaga własnego sposobu wgrywania — "
                          "ten skrypt kopiuje tylko do folderu (UNC albo dysk).")
-    return Path(tekst)
+    if len(foldery) > 1:
+        print(f"  Folder publikacji (pierwszy istniejący z {len(foldery)}): {folder}")
+    return Path(folder)
 
 
 def folder_kopii(podany: Optional[Path]) -> Optional[Path]:
@@ -207,7 +260,9 @@ def przywroc(kopia: Path, folder: Path, ver: str, wyd: Wydanie) -> int:
     glosy = _kopiuj_folder(kopia / GLOSY, folder / GLOSY, "*.json")
     if glosy:
         print(f"  baza głosów: {glosy} wpis(ów)")
-    akt = update.sprawdz("0.0.0", replace(wyd, aktualizacje_folder=str(folder)))
+    # Sprawdzenie tak, jak zrobi to program zainstalowany przed tą wersją.
+    wyd_podpisu, _ = jak_podpisac(wyd, wybrana)
+    akt = update.sprawdz("0.0.0", replace(wyd_podpisu, aktualizacje_folder=str(folder)))
     if akt is None or akt.wersja != wybrana or not akt.podpisana:
         raise SystemExit(f"Program nie uznałby przywróconego wydania: {akt and akt.uwaga}")
     print(f"\n  Gotowe. Folder firmowy ma znów wersję {wybrana} z podpisem.")
@@ -219,22 +274,24 @@ def podpisz(instalator: Path, wyd: Wydanie, plik_klucza: Path) -> tuple[str, Pat
     if not plik_klucza.is_file():
         raise SystemExit(
             f"Brak klucza do podpisu wydań: {plik_klucza}\n"
-            f"  Utwórz go: .venv\\Scripts\\python.exe tools\\klucz_wydan.py nowy\n"
-            f"  i wklej wypisany klucz publiczny do core/wydanie.py (KLUCZ_WYDAN)."
+            f"  Utwórz go: node C:/Users/it/matcode/narzedzia/nowy-klucz.js <program>-<wydanie> --format hex\n"
+            f"  i wpisz wypisany klucz publiczny do modułu wydania (src/whisper_automat/wydania/)."
         )
     klucz = podpis.wczytaj_klucz_prywatny(plik_klucza)
     if podpis.klucz_publiczny(klucz).hex() != wyd.klucz_publiczny:
         raise SystemExit(
-            "Klucz prywatny nie pasuje do klucza publicznego w core/wydanie.py — "
+            "Klucz prywatny nie pasuje do klucza publicznego wydania — "
             "program u ludzi odrzuciłby taki podpis."
         )
     suma = sha256(instalator)
     plik_sumy = instalator.with_name(instalator.name + ".sha256")
     plik_sumy.write_text(f"{suma}  {instalator.name}\n", encoding="ascii")
     plik_podpisu = instalator.with_name(instalator.name + ".podpis")
-    plik_podpisu.write_text(podpis.zapisz_podpis(instalator.name, suma, klucz), encoding="utf-8")
+    plik_podpisu.write_text(podpis.zapisz_podpis(instalator.name, suma, klucz, wyd.naglowek_podpisu),
+                            encoding="utf-8")
     if podpis.zweryfikuj_wydanie(plik_podpisu.read_text(encoding="utf-8"),
-                                 wyd.klucz_publiczny, instalator.name) != suma:
+                                 wyd.klucz_publiczny, instalator.name,
+                                 wyd.naglowek_podpisu) != suma:
         raise SystemExit("Podpis nie przeszedł własnej weryfikacji.")
     print(f"  {instalator.name}: {instalator.stat().st_size / MB:.0f} MB")
     print(f"  SHA-256: {suma}")
@@ -318,7 +375,7 @@ def publikuj_folder(wyd: Wydanie, ver: str, instalator: Path, suma: str, plik_su
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Publikuje wydanie: Papugę na GitHubie, Whisper Automat w folderze firmowym.")
+        description="Publikuje wydanie: Papugę na GitHubie, firmowe w folderze firmowym.")
     parser.add_argument("--wydanie", choices=("papuga", "firma"), default="papuga",
                         help="papuga = wydanie na GitHubie (domyślnie), "
                              "firma = kopia do folderu firmowego.")
@@ -328,8 +385,9 @@ def main() -> int:
                              "zobaczy nową wersję przy najbliższym sprawdzeniu.")
     parser.add_argument("--folder", type=Path,
                         help="Firma: folder docelowy (domyślnie z tools/aktualizacje_firmy.local.txt).")
-    parser.add_argument("--klucz", type=Path, default=KLUCZ_DOMYSLNY,
-                        help="Plik z kluczem prywatnym do podpisu wydań.")
+    parser.add_argument("--klucz", type=Path,
+                        help="Plik z kluczem prywatnym do podpisu wydań (domyślnie klucz "
+                             "wydania w ~/.matcode, przy wersji przejściowej — poprzedni).")
     parser.add_argument("--kopia", type=Path,
                         help="Firma: folder kopii zapasowej (domyślnie z tools/kopia_wydan.local.txt).")
     parser.add_argument("--zachowaj", type=int, default=3,
@@ -356,11 +414,14 @@ def main() -> int:
 
     ver = wersja()
     instalator = znajdz_instalator(wyd, ver)
-    suma, plik_sumy, plik_podpisu = podpisz(instalator, wyd, args.klucz)
+    # Podpis i sprawdzenie po publikacji — tak, jak oczekują programy, które
+    # już są zainstalowane (przy wersji przejściowej: poprzednia).
+    wyd_podpisu, plik_klucza = jak_podpisac(wyd, ver)
+    suma, plik_sumy, plik_podpisu = podpisz(instalator, wyd_podpisu, args.klucz or plik_klucza)
 
     if wyd.kod == "firma":
         folder = folder_firmy(args.folder)
-        kod = publikuj_folder(wyd, ver, instalator, suma, plik_sumy, plik_podpisu,
+        kod = publikuj_folder(wyd_podpisu, ver, instalator, suma, plik_sumy, plik_podpisu,
                               args.opis, folder)
         kopia = folder_kopii(args.kopia)
         if kod == 0 and kopia is not None:
@@ -370,7 +431,7 @@ def main() -> int:
             print(f"\n  (bez kopii zapasowej — wpisz folder do {PLIK_KOPII.name}, "
                   f"np. na dysku Google Drive)")
         return kod
-    return publikuj_github(wyd, ver, instalator, plik_sumy, plik_podpisu,
+    return publikuj_github(wyd_podpisu, ver, instalator, plik_sumy, plik_podpisu,
                            args.opis, args.od_razu)
 
 

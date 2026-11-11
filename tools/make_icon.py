@@ -1,10 +1,12 @@
 """Generuje ikonę i logo programu do assets/ — osobno dla każdego wydania.
 
   * firma  — mikrofon na niebieskim kafelku: assets/
-  * papuga — głowa ary w jej barwach:        assets/papuga/
+  * papuga — głowa ary w jej barwach:        assets/matcode/
 
-Program szuka zasobów najpierw w katalogu swojego wydania, potem w assets/
-(core/config.asset), więc wydanie bez własnego katalogu dostaje ikonę firmową.
+Program szuka zasobów najpierw w katalogu grafik swojego wydania
+(`Wydanie.zasoby`), potem w assets/ (core/config.asset), więc wydanie bez
+własnego katalogu dostaje ikonę firmową. Filiżanka odnośnika wsparcia też
+leży w assets/matcode/ — paczka firmowa tego katalogu nie dostaje.
 
 Narzędzie budowy, nie część aplikacji — gotowe pliki leżą w repozytorium,
 więc do uruchomienia programu Pillow nie jest potrzebne.
@@ -226,7 +228,7 @@ def zbuduj_ara() -> Image.Image:
 
 IKONY = {
     "firma": (zbuduj_mikrofon, ASSETS),
-    "papuga": (zbuduj_ara, ASSETS / "papuga"),
+    "papuga": (zbuduj_ara, ASSETS / "matcode"),
 }
 
 
@@ -307,7 +309,8 @@ def zapisz_kontrolki() -> None:
 
 
 def zapisz_kawe(na_ciemnym: bool = False) -> None:
-    """Filiżanka do przycisku „Postaw kawę”. Emoji ☕ Tk rysuje jako plamę.
+    """Filiżanka do odnośnika wsparcia (wydanie publiczne). Emoji ☕ Tk
+    rysuje jako plamę.
 
     Dwa warianty: ciemna na żółte wypełnienie (kawa.png) i żółta na ciemne
     tło okna (kawa-zolta.png) — tej używa cichy przycisk w nagłówku.
@@ -320,7 +323,7 @@ def zapisz_kawe(na_ciemnym: bool = False) -> None:
     szer, wys = 16, 16
     obraz = Image.new("RGBA", (szer * s, wys * s), (0, 0, 0, 0))
     rysuj = ImageDraw.Draw(obraz)
-    kolor = _hex(theme.KAWA if na_ciemnym else theme.KAWA_FG)
+    kolor = _hex(theme.WSPARCIE if na_ciemnym else theme.WSPARCIE_FG)
     # Ucho po prawej, potem czasza filiżanki, która je zachodzi.
     rysuj.ellipse((9.0 * s, 7.0 * s, 14.6 * s, 12.4 * s), outline=kolor, width=int(1.5 * s))
     rysuj.rounded_rectangle((1.4 * s, 6.0 * s, 11.6 * s, 14.6 * s), radius=int(3.2 * s),
@@ -330,9 +333,10 @@ def zapisz_kawe(na_ciemnym: bool = False) -> None:
     for x in (4.6, 8.0):
         rysuj.line([(x * s, 4.6 * s), ((x + 0.9) * s, 3.0 * s), (x * s, 1.4 * s)],
                    fill=kolor, width=int(1.3 * s), joint="curve")
-    KONTROLKI.mkdir(parents=True, exist_ok=True)
-    obraz.resize((szer, wys), Image.LANCZOS).save(KONTROLKI / nazwa)
-    print(f"zapisano {KONTROLKI / nazwa}")
+    cel = ASSETS / "matcode" / "ui"
+    cel.mkdir(parents=True, exist_ok=True)
+    obraz.resize((szer, wys), Image.LANCZOS).save(cel / nazwa)
+    print(f"zapisano {cel / nazwa}")
 
 
 def main() -> None:

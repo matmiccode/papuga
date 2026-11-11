@@ -7,14 +7,17 @@ pliki bez tych elementów, jeden commit na publikację. Kod jest otwarty
 (MIT), a prywatna historia zostaje prywatna.
 
 Do publicznego repo trafia wszystko, co śledzi git, poza:
-  * PROGRESS.md, INSTRUKCJA.txt i katalogiem dokumentacja/ (dokumenty firmowe),
+  * CLAUDE.md, PROGRESS.md, INSTRUKCJA.txt i katalogiem dokumentacja/ (dokumenty firmowe),
   * README.md — zastępuje go publikacja/README.md,
   * katalogiem publikacja/ (szablony dla tego skryptu).
 Do tego generowany LICENCJE.txt (tools/licencje.py).
 
 Przed wysłaniem skrypt przeszukuje migawkę pod kątem zakazanych słów —
 z tools/podpis_firmy.local.txt (wszystko poza marką MATCODE) i z pliku
---zakazane — i przerywa, gdy coś znajdzie.
+--zakazane — i przerywa, gdy coś znajdzie. Potem to samo w drugą stronę
+narzędziem centrali (`sprawdz-firmowe.js --publiczne`, tools/sprawdz_marke.py):
+bez śladu firmy i bez nazwy, pliku i identyfikatorów wydania firmowego —
+dlatego migawka nie ma też modułu danych tego wydania.
 
 Uruchomienie (gh zalogowany na konto właściciela repozytorium):
     .venv\\Scripts\\python.exe tools\\publikuj_kod.py             # commit + push do ..\\papuga
@@ -42,7 +45,14 @@ from whisper_automat.core.wydanie import WYDANIA  # noqa: E402
 
 WYD = WYDANIA["papuga"]
 KLON = ROOT.parent / "papuga"
-WYKLUCZONE = ["PROGRESS.md", "INSTRUKCJA.txt", "README.md", "publikacja", "dokumentacja"]
+WYKLUCZONE = ["CLAUDE.md", "PROGRESS.md", "INSTRUKCJA.txt", "README.md", "publikacja", "dokumentacja",
+              # Dane wydania firmowego (nazwa, identyfikatory, klucz) — kod publiczny
+              # ich nie zna (core/wydanie.py wczytuje tylko moduły, które są).
+              "src/whisper_automat/wydania/firmowe.py",
+              # Narzędzia sieci firmowej: uprawnienia udziału, pobieranie modelu
+              # zza firmowego proxy i diagnoza jego certyfikatów.
+              "tools/zabezpiecz_folder.ps1", "tools/pobierz_model.ps1",
+              "tools/sprawdz_polaczenie.ps1"]
 PLIK_PODPISU = ROOT / "tools" / "podpis_firmy.local.txt"
 PLIK_KONTAKTU = ROOT / "tools" / "kontakt_firmy.local.txt"
 BINARNE = {".png", ".ico", ".onnx", ".bin", ".exe", ".dll", ".pyd", ".zip", ".jpg", ".woff2"}
@@ -198,6 +208,15 @@ def main() -> int:
         trafienia = przeszukaj(kod, zakazane_slowa(args.zakazane))
         if trafienia:
             raise SystemExit("PRZERWANO — zakazane słowa w plikach:\n  " + "\n  ".join(trafienia))
+        # Kontrola w drugą stronę narzędziem centrali MATCODE: migawka i — gdy
+        # leży w dist/ — paczka wydania publicznego bez śladu firmy (nazwa,
+        # adres udziału, nazwisko) i bez nazwy czy identyfikatorów wydania firmowego.
+        import sprawdz_marke
+
+        paczka = ROOT / "dist" / WYD.plik
+        sprawdz_marke.sprawdz([kod, *([paczka] if paczka.is_dir() else [])],
+                              sprawdz_marke.slowa_wydania("firma"), publiczne=True,
+                              opis="migawka kodu publicznego")
         if args.tylko_sprawdz:
             pliki = sorted(str(p.relative_to(kod)) for p in kod.rglob("*") if p.is_file())
             print(f"  migawka: {len(pliki)} plików, zakazanych słów nie znaleziono")

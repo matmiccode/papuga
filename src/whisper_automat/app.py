@@ -113,7 +113,7 @@ def _wpis_urzadzenia(p: urzadzenia.PunktAudio) -> str:
 
 
 def _tytul_okna() -> str:
-    """„Papuga – offline transcription”: nazwa z hasłem w języku okna."""
+    """„Nazwa – hasło”: nazwa z hasłem w języku okna."""
     return f"{APP_NAME} – {t(WYDANIE.haslo)}" if WYDANIE.haslo else APP_NAME
 
 
@@ -336,17 +336,17 @@ class App:
         )
         self.gpu_label.pack(side="left")
 
-        # Druga linia: odnośniki. Kawa stoi tu, cicho, a nie jako żółty
+        # Druga linia: odnośniki. Wsparcie stoi tu, cicho, a nie jako żółty
         # przycisk wyżej — jedynym głośnym elementem okna ma być „Transkrybuj”,
-        # a w trakcie pracy pasek z piór.
+        # a w trakcie pracy pasek postępu.
         podpis = tk.Frame(head, bg=BG)
         podpis.grid(row=1, column=2, sticky="e", pady=(6, 0))
         # Pigułka z drugim językiem („EN” w polskim oknie, „PL” w angielskim)
         # stoi obok „Jak to działa?” — cicho, w tym samym rzędzie odnośników.
         self._pigulka_jezyka(podpis).pack(side="left", padx=(0, 14))
         self._link(podpis, t("Jak to działa?"), self.pokaz_pomoc).pack(side="left")
-        if WYDANIE.wsparcie_url:
-            self._przycisk_kawy(podpis).pack(side="left", padx=(16, 0))
+        if WYDANIE.wsparcie_url and WYDANIE.wsparcie_tekst:
+            self._przycisk_wsparcia(podpis).pack(side="left", padx=(16, 0))
         # Wydanie z podpisem autora w stopce pokazuje tu sam numer wersji —
         # nazwisko ma stać w jednym miejscu, nie w dwóch.
         ttk.Label(
@@ -425,30 +425,31 @@ class App:
             return
         self._zamknij()
 
-    def _przycisk_kawy(self, parent) -> tk.Label:
-        """Odnośnik wsparcia: żółta filiżanka i napis, bez wypełnienia.
+    def _przycisk_wsparcia(self, parent) -> tk.Label:
+        """Odnośnik wsparcia: żółta ikonka i napis, bez wypełnienia.
 
-        Żółć z piór zostaje znakiem rozpoznawczym, ale po cichu. Wcześniej
-        żółty kafelek był najgłośniejszym punktem okna i konkurował
-        z przyciskiem Transkrybuj oraz z paskiem postępu.
+        Napis, ikonka i adres pochodzą z wydania (`Wydanie.wsparcie_*`).
+        Żółć zostaje znakiem rozpoznawczym, ale po cichu. Wcześniej żółty
+        kafelek był najgłośniejszym punktem okna i konkurował z przyciskiem
+        Transkrybuj oraz z paskiem postępu.
         """
         przycisk = tk.Label(
-            parent, text=t("Postaw kawę autorowi"), bg=BG, fg=theme.KAWA,
+            parent, text=t(WYDANIE.wsparcie_tekst), bg=BG, fg=theme.WSPARCIE,
             cursor="hand2", font=(theme.FONT, 9),
         )
-        plik = asset("ui/kawa-zolta.png")
+        plik = asset(WYDANIE.wsparcie_ikona) if WYDANIE.wsparcie_ikona else None
         if plik is not None:
             try:
-                self._ikona_kawy = tk.PhotoImage(master=self.root, file=str(plik))
-                przycisk.configure(image=self._ikona_kawy, compound="left",
+                self._ikona_wsparcia = tk.PhotoImage(master=self.root, file=str(plik))
+                przycisk.configure(image=self._ikona_wsparcia, compound="left",
                                    text="  " + przycisk.cget("text"))
             except tk.TclError:
                 pass
         przycisk.bind("<Button-1>", lambda _e: webbrowser.open(WYDANIE.wsparcie_url))
         przycisk.bind("<Enter>", lambda _e: przycisk.configure(
-            fg=theme.KAWA_HOVER, font=(theme.FONT, 9, "underline")))
+            fg=theme.WSPARCIE_HOVER, font=(theme.FONT, 9, "underline")))
         przycisk.bind("<Leave>", lambda _e: przycisk.configure(
-            fg=theme.KAWA, font=(theme.FONT, 9)))
+            fg=theme.WSPARCIE, font=(theme.FONT, 9)))
         return przycisk
 
     def _wczytaj_logo(self) -> Optional[tk.PhotoImage]:
@@ -742,6 +743,9 @@ class App:
         self._obraz_teraz = None
         self._okno_nagrania = None
         self._okno_schowane: Optional[bool] = None
+        #: Co udostępniasz teraz (wideo.Ekran / wideo.Okno), gdy obraz sam za
+        #: tym idzie; None — nie udostępniasz.
+        self._udostepniane = None
         self._dymek = None
         #: Czy ffmpeg umie nagrywać okna — None, dopóki sprawdzanie w tle
         #: (_rozgrzej_obraz, kilka sekund przy pierwszym razie) nie skończy.
@@ -1405,6 +1409,7 @@ class App:
             obraz=lambda p, b: put(("nagranie_obraz", str(p) if p else "", b)),
             okno_spotkania=lambda s: put(("nagranie_okno_spotkania", s)),
             zrodlo_obrazu=lambda z: put(("nagranie_zrodlo_obrazu", z)),
+            udostepnianie=lambda z: put(("nagranie_udostepnianie", z)),
             przepiety=lambda tor, u: put(("nagranie_przepiety", tor, u)),
             mikrofon=lambda w: put(("nagranie_mikrofon", w)),
         )
@@ -1425,6 +1430,7 @@ class App:
                                  "glosniki": settings.nagranie_glosniki}
         self._okno_nagrania = zrodlo if isinstance(zrodlo, wideo.Okno) else None
         self._okno_schowane = None
+        self._udostepniane = None
         self._ustaw_stan_nagrywania(True)
         self.log(t("Nagrywam spotkanie: {plik}").format(plik=plik.name))
         if zrodlo is not None:
@@ -1525,6 +1531,7 @@ class App:
                 self.start_btn.configure(state="normal")
             self._zamknij_dymek()
             self._obraz_teraz = self._okno_nagrania = self._okno_schowane = None
+            self._udostepniane = None
             self._nagranie_z_obrazem = False
             self._wybor_w_trakcie = {}
             if self._wyciszony:
@@ -1701,7 +1708,7 @@ class App:
         if not self._nagrywa():
             return
         self._obraz_teraz = zrodlo
-        if isinstance(zrodlo, wideo.Okno):
+        if isinstance(zrodlo, wideo.Okno) and self._udostepniane is None:
             self._okno_nagrania = zrodlo
         self._ustaw_przycisk_obrazu()
         self._odswiez_zrodla()
@@ -1709,6 +1716,53 @@ class App:
         tekst = t("Obraz przełączony na: {zrodlo}").format(zrodlo=wideo.opis_zrodla(zrodlo))
         self.log(tekst)
         self.status_var.set(tekst)
+
+    def _po_udostepnianiu(self, zrodlo) -> None:
+        """Udostępniasz ekran albo okno (ramka Teams) — obraz sam przełącza
+        się na to, co udostępniasz; None — koniec, obraz wraca do okna spotkania.
+
+        Dymek tylko informuje, bez pytania: okno spotkania Teams nagrywa się
+        w trakcie udostępniania na czarno, więc nie ma do czego wracać.
+        """
+        if not self._nagrywa():
+            return
+        self._udostepniane = zrodlo
+        self._zamknij_dymek()
+        if zrodlo is None:
+            tekst = t("Udostępnianie skończone.")
+            self.log(tekst)
+            self.status_var.set(tekst)
+            return
+        if isinstance(zrodlo, wideo.Pytanie):
+            self._dymek_ktory_ekran(zrodlo.rodzaj)
+            return
+        co = wideo.opis_zrodla(zrodlo)
+        self.log(t("Udostępniasz: {co} — nagrywam to, co udostępniasz.").format(co=co))
+        self._pokaz_dymek(
+            t("Nagrywam to, co udostępniasz"),
+            t("Udostępniasz: {co}. Obraz w nagraniu idzie za tym, co widzą uczestnicy, "
+              "a po końcu udostępniania sam wróci do okna spotkania.").format(co=co),
+            [(t("OK"), lambda: None, True)], czas_s=10)
+
+    def _dymek_ktory_ekran(self, rodzaj: str) -> None:
+        """Udostępniasz ze strony w przeglądarce (Meet), a program nie wie,
+        który monitor (kilka monitorów) albo które okno — pyta o monitor."""
+        ekrany = self._ekrany_po_kolei(wideo.ekrany())
+        if not ekrany:
+            return
+        if rodzaj == "ekran":
+            self.log(t("Udostępniasz ekran w przeglądarce — pytam, który monitor nagrywać."))
+            tekst = t("Program nie wie, który monitor udostępniasz. Wybierz go, a w nagraniu "
+                      "będzie to, co widzą uczestnicy. Po końcu udostępniania obraz sam wróci "
+                      "do okna spotkania.")
+        else:
+            self.log(t("Udostępniasz okno w przeglądarce, ale program nie wie które — pytam."))
+            tekst = t("Program nie wie, które okno udostępniasz. Możesz nagrywać cały monitor "
+                      "z tym oknem — nagra się wszystko, co na nim widać.")
+        przyciski = [(wideo.opis_ekranu(e, len(ekrany)), lambda e=e: self._na_zrodlo(e), i == 0)
+                     for i, e in enumerate(ekrany)]
+        przyciski.append((t("Nie teraz"), lambda: None, False))
+        self._pokaz_dymek(t("Co nagrywać przy udostępnianiu?"), tekst, przyciski)
 
     def _po_oknie_spotkania(self, schowane: bool) -> None:
         """Okno spotkania schowało się albo wróciło. Pytamy, gdy stan
@@ -1719,6 +1773,8 @@ class App:
     def _zapytaj_o_obraz(self, schowane: bool) -> None:
         if not self._nagrywa() or self._okno_schowane != schowane or self._obraz_teraz is None:
             return
+        if self._udostepniane is not None:
+            return  # obraz już sam idzie za udostępnianiem
         ekran_teraz = isinstance(self._obraz_teraz, wideo.Ekran)
         if schowane and not ekran_teraz:
             self._dymek_caly_ekran()
@@ -1753,13 +1809,14 @@ class App:
             [(t("Wróć do okna spotkania"), self._wroc_do_okna, True),
              (t("Zostaw cały ekran"), lambda: None, False)])
 
-    def _pokaz_dymek(self, tytul: str, tekst: str, przyciski) -> None:
-        """Dymek w rogu ekranu, na wierzchu (program jest wtedy zwykle w tle)."""
+    def _pokaz_dymek(self, tytul: str, tekst: str, przyciski, czas_s: float = 60) -> None:
+        """Dymek u góry na środku ekranu, na którym pracujesz, na wierzchu
+        (program jest wtedy zwykle w tle); niewidoczny w udostępnianiu."""
         from .dymek import Dymek
 
         self._zamknij_dymek()
         self.status_var.set(tekst)
-        self._dymek = Dymek(self.root, tytul, tekst, przyciski, czas_s=60)
+        self._dymek = Dymek(self.root, tytul, tekst, przyciski, czas_s=czas_s)
         self._zwroc_uwage(dzwiek=False)
 
     def _zamknij_dymek(self) -> None:
@@ -2234,7 +2291,7 @@ class App:
         # Górny pasek: bieżący plik. Dolny, cieńszy: cała kolejka.
         self.file_progress = theme.PasekPostepu(
             postep, maximum=1000, grubosc=6,
-            kolory=theme.PIORA if WYDANIE.kod == "papuga" else None)
+            kolory=WYDANIE.kolory_postepu or None)
         self.file_progress.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
         self.overall_progress = theme.PasekPostepu(
             postep, maximum=1000, grubosc=3, kolor=theme.FG_FAINT)
@@ -2940,6 +2997,8 @@ class App:
             self._po_oknie_spotkania(bool(event[1]))
         elif kind == "nagranie_zrodlo_obrazu":
             self._po_zmianie_obrazu(event[1])
+        elif kind == "nagranie_udostepnianie":
+            self._po_udostepnianiu(event[1])
         elif kind == "nagranie_przepiety":
             self._po_przepieciu(event[1], event[2])
         elif kind == "nagranie_mikrofon":

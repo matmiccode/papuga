@@ -49,6 +49,36 @@ class FolderTest(unittest.TestCase):
         self.assertEqual(G.katalog(), self.tmp / "Glosy")
         self.assertTrue(G.dostepna())
 
+    def _firma(self, foldery: str):
+        from unittest import mock
+
+        from whisper_automat.core.wydanie import Wydanie
+
+        os.environ.pop(G.ZMIENNA, None)
+        wyd = Wydanie(kod="firma", nazwa="Program", plik="Program", app_id="Program.App",
+                      inno_id="{00000000-0000-0000-0000-000000000000}",
+                      aktualizacje_folder=foldery)
+        return mock.patch.object(G, "biezace", return_value=wyd)
+
+    def test_przeprowadzka_nowy_przed_starym(self):
+        stary, nowy = self.tmp / "Program", self.tmp / "Programy na PC" / "Program"
+        stary.mkdir()
+        with self._firma(f"{nowy};{stary}"):
+            self.assertEqual(G.katalog(), stary / "Glosy")      # nowego jeszcze nie ma
+            nowy.mkdir(parents=True)
+            self.assertEqual(G.katalog(), nowy / "Glosy")      # po przeniesieniu
+
+    def test_dostepna_nie_pyta_udzialu(self):
+        # Laptop poza siecią: baza „jest” w tym wydaniu, tylko chwilowo nieosiągalna.
+        nie_ma = self.tmp / "nie-ma"
+        with self._firma(f"{nie_ma / 'nowy'};{nie_ma / 'stary'}"):
+            self.assertTrue(G.dostepna())
+            self.assertEqual(G.katalog(), nie_ma / "nowy" / "Glosy")
+        with self._firma("https://serwer/wydania"):
+            self.assertFalse(G.dostepna())
+        with self._firma(""):
+            self.assertFalse(G.dostepna())
+
     def test_nazwa_pliku(self):
         self.assertEqual(G.nazwa_pliku("Jan.Kowalski"), "jan.kowalski.json")
         self.assertEqual(G.nazwa_pliku("FIRMA\\jan kowalski"), "firma_jan_kowalski.json")

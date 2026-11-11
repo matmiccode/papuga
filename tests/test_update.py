@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from whisper_automat.core import download, podpis, update  # noqa: E402
-from whisper_automat.core.wydanie import WYDANIA  # noqa: E402
+from whisper_automat.core.wydanie import WYDANIA, Wydanie  # noqa: E402
 
 KLUCZ = podpis.nowy_klucz()
 WYD = replace(WYDANIA["papuga"], klucz_publiczny=podpis.klucz_publiczny(KLUCZ).hex())
@@ -104,7 +104,7 @@ class Sprawdzanie(unittest.TestCase):
 
     def test_podpisane_wydanie_do_instalacji(self):
         nazwa = "Papuga-1.2.0-Setup.exe"
-        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ)
+        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ, WYD.naglowek_podpisu)
         akt = self._sprawdz([zalacznik(nazwa, SUMA), zalacznik(nazwa + ".podpis")],
                             {nazwa + ".podpis": tekst})
         self.assertEqual(akt.wersja, "1.2.0")
@@ -124,14 +124,14 @@ class Sprawdzanie(unittest.TestCase):
 
     def test_podpis_obcym_kluczem(self):
         nazwa = "Papuga-1.2.0-Setup.exe"
-        tekst = podpis.zapisz_podpis(nazwa, SUMA, podpis.nowy_klucz())
+        tekst = podpis.zapisz_podpis(nazwa, SUMA, podpis.nowy_klucz(), WYD.naglowek_podpisu)
         akt = self._sprawdz([zalacznik(nazwa, SUMA), zalacznik(nazwa + ".podpis")],
                             {nazwa + ".podpis": tekst})
         self.assertFalse(update.mozna_zainstalowac(akt, WYD))
 
     def test_digest_githuba_rozny_od_podpisanego(self):
         nazwa = "Papuga-1.2.0-Setup.exe"
-        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ)
+        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ, WYD.naglowek_podpisu)
         akt = self._sprawdz([zalacznik(nazwa, "0" * 64), zalacznik(nazwa + ".podpis")],
                             {nazwa + ".podpis": tekst})
         self.assertFalse(update.mozna_zainstalowac(akt, WYD))
@@ -139,7 +139,7 @@ class Sprawdzanie(unittest.TestCase):
 
     def test_adres_spoza_wydan_odrzucony(self):
         nazwa = "Papuga-1.2.0-Setup.exe"
-        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ)
+        tekst = podpis.zapisz_podpis(nazwa, SUMA, KLUCZ, WYD.naglowek_podpisu)
         zly = zalacznik(nazwa, SUMA)
         zly["browser_download_url"] = "https://example.com/" + nazwa
         akt = self._sprawdz([zly, zalacznik(nazwa + ".podpis")], {nazwa + ".podpis": tekst})
@@ -171,7 +171,11 @@ class Sprawdzanie(unittest.TestCase):
         self.assertIsNone(update.sprawdz("1.1.0", WYD))
 
 
-FIRMA = replace(WYDANIA["firma"], klucz_publiczny=podpis.klucz_publiczny(KLUCZ).hex())
+#: Wydanie firmowe do testów folderu — własne, bo kod publiczny nie ma
+#: modułu wydania firmowego (wydania/firmowe.py).
+FIRMA = Wydanie(kod="firma", nazwa="Program", plik="Program", app_id="Program.App",
+                inno_id="{00000000-0000-0000-0000-000000000000}",
+                klucz_publiczny=podpis.klucz_publiczny(KLUCZ).hex())
 
 
 class Folder(unittest.TestCase):
@@ -182,7 +186,7 @@ class Folder(unittest.TestCase):
         self.folder = Path(self.tmp.name) / "wydania"
         self.folder.mkdir()
         self.wyd = replace(FIRMA, aktualizacje_folder=str(self.folder))
-        self.nazwa = "WhisperAutomat-1.4.0-Setup-offline.exe"
+        self.nazwa = f"{FIRMA.plik}-1.4.0-Setup-offline.exe"
         self.tresc = b"udawany instalator " * 1000
         self.suma = hashlib.sha256(self.tresc).hexdigest()
 
@@ -194,14 +198,15 @@ class Folder(unittest.TestCase):
         (self.folder / self.nazwa).write_bytes(self.tresc)
         if podpisz:
             (self.folder / (nazwa + ".podpis")).write_text(
-                podpis.zapisz_podpis(nazwa, self.suma, klucz), encoding="utf-8")
+                podpis.zapisz_podpis(nazwa, self.suma, klucz, self.wyd.naglowek_podpisu), encoding="utf-8")
         (self.folder / update.MANIFEST).write_text(json.dumps({
             "wersja": wersja, "instalator": nazwa, "rozmiar": len(self.tresc),
             "opis": "Co nowego",
         }), encoding="utf-8")
 
     def test_zrodlo_wybiera_wydanie(self):
-        self.assertFalse(WYDANIA["firma"].aktualizacje)   # folder dopiero z paczki
+        if "firma" in WYDANIA:
+            self.assertFalse(WYDANIA["firma"].aktualizacje)   # folder dopiero z paczki
         self.assertTrue(self.wyd.aktualizacje)
         self.assertTrue(WYDANIA["papuga"].aktualizacje)   # GitHub
         self.assertEqual(WYDANIA["papuga"].aktualizacje_folder, "")
@@ -258,6 +263,46 @@ class Folder(unittest.TestCase):
         with self.assertRaises(update.UpdateError):
             update.sprawdz("1.3.0", wyd)
 
+    # -- przeprowadzka folderu: nowy przed starym (wersja przejściowa) ------
+
+    def _dwa(self, nowy: Path) -> "update.Wydanie":
+        return replace(self.wyd, aktualizacje_folder=f"{nowy};{self.folder}")
+
+    def test_nowego_nie_ma_bierze_stary(self):
+        self._opublikuj()
+        wyd = self._dwa(Path(self.tmp.name) / "Programy na PC" / "Program")
+        akt = update.sprawdz("1.3.0", wyd)
+        self.assertEqual(akt.wersja, "1.4.0")
+        self.assertEqual(akt.strona, str(self.folder))
+        self.assertEqual(Path(akt.url), self.folder / self.nazwa)
+        self.assertTrue(update.mozna_zainstalowac(akt, wyd))
+
+    def test_nowy_jest_bierze_nowy(self):
+        self._opublikuj(wersja="1.4.0")
+        nowy = Path(self.tmp.name) / "nowy"
+        nowy.mkdir()
+        # Nowy folder istnieje, ale jeszcze nic w nim nie ma — stary już się
+        # nie liczy (folder przenosi się w całości).
+        self.assertIsNone(update.sprawdz("1.3.0", self._dwa(nowy)))
+        stary, self.folder = self.folder, nowy
+        self._opublikuj(wersja="1.5.0")
+        akt = update.sprawdz("1.3.0", replace(self.wyd, aktualizacje_folder=f"{nowy};{stary}"))
+        self.assertEqual(akt.wersja, "1.5.0")
+        self.assertEqual(akt.strona, str(nowy))
+
+    def test_zaden_niedostepny_podaje_oba(self):
+        nowy = Path(self.tmp.name) / "nie-ma-nowego"
+        wyd = replace(self.wyd, aktualizacje_folder=f"{nowy};{self.folder / 'nie-ma'}")
+        with self.assertRaises(update.UpdateError) as blad:
+            update.sprawdz("1.3.0", wyd)
+        self.assertIn(str(nowy), str(blad.exception))
+        self.assertIn(str(self.folder / "nie-ma"), str(blad.exception))
+
+    def test_lista_folderow(self):
+        wyd = replace(self.wyd, aktualizacje_folder=" \\\\s\\a\\Nowy ;\n\\\\s\\a\\Stary;; ")
+        self.assertEqual(wyd.foldery_aktualizacji, ("\\\\s\\a\\Nowy", "\\\\s\\a\\Stary"))
+        self.assertEqual(replace(self.wyd, aktualizacje_folder="").foldery_aktualizacji, ())
+
     def test_instalator_ze_sciezka_odrzucony(self):
         self._opublikuj(instalator="..\\" + self.nazwa)
         akt = update.sprawdz("1.3.0", self.wyd)
@@ -272,6 +317,53 @@ class Folder(unittest.TestCase):
             download.kopiuj_plik(self.folder / self.nazwa, cel, plik)
         self.assertFalse((cel / self.nazwa).exists())
         self.assertFalse((cel / (self.nazwa + ".part")).exists())
+
+
+@unittest.skipIf("firma" not in WYDANIA, "kod publiczny: bez modułu wydania firmowego")
+class Przejscie(unittest.TestCase):
+    """Wersja przejściowa podpisuje się tak, jak oczekuje poprzednia wersja."""
+
+    #: Co ma wbudowane firmowe 1.6.5 (i Papuga do dziś): wspólny klucz i nagłówek.
+    STARY_KLUCZ = "5889fe93bba0dc4ee0df9a4be7c5f3ad908cce307f7d664f0046773f335656b4"
+    STARY_NAGLOWEK = "papuga-podpis 1"
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+        import publikuj_wydanie
+
+        cls.P = publikuj_wydanie
+
+    def test_firma_166_tak_jak_przyjmie_165(self):
+        wyd, plik = self.P.jak_podpisac(WYDANIA["firma"], "1.6.6")
+        self.assertEqual((wyd.klucz_publiczny, wyd.naglowek_podpisu),
+                         (self.STARY_KLUCZ, self.STARY_NAGLOWEK))
+        self.assertEqual(plik.name, "papuga-klucz-wydan.txt")
+        # 1.6.5 przyjmie podpis zrobiony tymi ustawieniami (tu: klucz testowy).
+        klucz = podpis.nowy_klucz()
+        nazwa = f"{wyd.plik}-1.6.6-Setup-offline.exe"
+        tekst = podpis.zapisz_podpis(nazwa, SUMA, klucz, wyd.naglowek_podpisu)
+        self.assertEqual(podpis.zweryfikuj_wydanie(
+            tekst, podpis.klucz_publiczny(klucz).hex(), nazwa, self.STARY_NAGLOWEK), SUMA)
+
+    def test_kolejne_wersje_po_nowemu(self):
+        # Od 1.6.7: własny klucz firmowy (wbudowany już w 1.6.6) i własny nagłówek.
+        wyd, plik = self.P.jak_podpisac(WYDANIA["firma"], "1.6.7")
+        self.assertEqual(wyd, WYDANIA["firma"])
+        self.assertNotEqual(wyd.naglowek_podpisu, self.STARY_NAGLOWEK)
+        self.assertNotEqual(wyd.klucz_publiczny, self.STARY_KLUCZ)
+        self.assertEqual(plik.name, "whisper-firma-klucz-wydan.txt")
+
+    def test_klucze_wydan_rozdzielone(self):
+        self.assertNotEqual(WYDANIA["firma"].klucz_publiczny, WYDANIA["papuga"].klucz_publiczny)
+        self.assertEqual(len(bytes.fromhex(WYDANIA["firma"].klucz_publiczny)), 32)
+
+    def test_papuga_dalej_po_staremu(self):
+        for ver in ("1.6.5", "1.6.6", "1.6.7"):
+            wyd, plik = self.P.jak_podpisac(WYDANIA["papuga"], ver)
+            self.assertEqual((wyd.klucz_publiczny, wyd.naglowek_podpisu),
+                             (self.STARY_KLUCZ, self.STARY_NAGLOWEK))
+            self.assertEqual(plik.name, "papuga-klucz-wydan.txt")
 
 
 if __name__ == "__main__":

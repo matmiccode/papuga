@@ -1,4 +1,4 @@
-"""Teksty interfejsu w dwóch językach (wzór: Nutka 1.4.0, MATCODE).
+"""Teksty interfejsu w dwóch językach.
 
 Kod i teksty w kodzie zostają po polsku; `t("Transkrybuj")` zwraca
 „Transcribe”, gdy wybrany jest angielski. Tabela `EN` niżej to jedyne
@@ -12,7 +12,9 @@ programu (pigułka EN/PL w nagłówku → `App._zmien_jezyk`) > język
 interfejsu Windows (polski → pl, każdy inny → en).
 
 Dotyczy obu wydań — kod jest wspólny. Hasło i opis wydania (core/wydanie.py)
-też przechodzą przez `t()`.
+też przechodzą przez `t()`. Teksty, które ma tylko jedno wydanie (np. napis
+odnośnika wsparcia), tłumaczy jego moduł w pakiecie `wydania` (`EN`) —
+core/wydanie.py dopisuje je tutaj przy starcie.
 """
 
 from __future__ import annotations
@@ -100,7 +102,6 @@ EN = {
         "{gpu}: inactive, running on the processor",
     "Procesor, brak karty NVIDIA": "Processor, no NVIDIA card",
     "Jak to działa?": "How it works?",
-    "Postaw kawę autorowi": "Buy the author a coffee",
     "Program jeszcze pracuje. Przerwać pracę i zmienić język teraz?":
         "The app is still working. Stop it and switch the language now?",
     "Nie udało się uruchomić programu ponownie: {blad}":
@@ -1002,6 +1003,30 @@ EN = {
         "records everything else you do on it.",
     "Wróć do okna spotkania": "Back to the meeting window",
     "Zostaw cały ekran": "Keep the whole screen",
+    "Udostępnianie skończone.": "Sharing has ended.",
+    "Udostępniasz: {co} — nagrywam to, co udostępniasz.":
+        "You are sharing: {co} — recording what you share.",
+    "Nagrywam to, co udostępniasz": "Recording what you share",
+    "Udostępniasz ekran w przeglądarce — pytam, który monitor nagrywać.":
+        "You are sharing your screen from the browser — asking which monitor to record.",
+    "Udostępniasz okno w przeglądarce, ale program nie wie które — pytam.":
+        "You are sharing a window from the browser, but the program cannot tell which — "
+        "asking.",
+    "Program nie wie, który monitor udostępniasz. Wybierz go, a w nagraniu "
+    "będzie to, co widzą uczestnicy. Po końcu udostępniania obraz sam wróci "
+    "do okna spotkania.":
+        "The program cannot tell which monitor you are sharing. Pick it and the recording "
+        "will show what the participants see. When you stop sharing, the video goes back "
+        "to the meeting window by itself.",
+    "Program nie wie, które okno udostępniasz. Możesz nagrywać cały monitor "
+    "z tym oknem — nagra się wszystko, co na nim widać.":
+        "The program cannot tell which window you are sharing. You can record the whole "
+        "monitor with that window — everything visible on it gets recorded.",
+    "Co nagrywać przy udostępnianiu?": "What to record while sharing?",
+    "Udostępniasz: {co}. Obraz w nagraniu idzie za tym, co widzą uczestnicy, "
+    "a po końcu udostępniania sam wróci do okna spotkania.":
+        "You are sharing: {co}. The video follows what the participants see and goes "
+        "back to the meeting window by itself when you stop sharing.",
     "Ten ffmpeg nie umie nagrywać okien — nagrywam sam dźwięk.":
         "This ffmpeg cannot record windows — recording audio only.",
     "Nie udało się złożyć obrazu spotkania: {blad}. Odcinki obrazu (.ts) zostały "

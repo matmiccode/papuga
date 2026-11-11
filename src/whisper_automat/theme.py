@@ -36,10 +36,11 @@ OK_COLOR = "#4fb47a"
 WARN_COLOR = "#e3a83a"
 ERR_COLOR = "#e05a5a"
 
-#: Przycisk „Postaw kawę” — żółć z piór Papugi (theme.PIORA).
-KAWA = "#f7ba1c"
-KAWA_HOVER = "#ffcb45"
-KAWA_FG = "#231a05"
+#: Odnośnik wsparcia w nagłówku (`Wydanie.wsparcie_*`) — cicha żółć;
+#: WSPARCIE_FG to ciemny kolor ikonki na żółtym tle (tools/make_icon.py).
+WSPARCIE = "#f7ba1c"
+WSPARCIE_HOVER = "#ffcb45"
+WSPARCIE_FG = "#231a05"
 
 #: Pasek o nowej wersji — widać go od razu, ale nie krzyczy kolorem błędu.
 BANER_BG = "#22314a"
@@ -49,9 +50,6 @@ BANER_WARN_BG = "#33301d"  # ta sama nakładka z błędami: bursztyn pod WARN_CO
 #: Tor pustego paska postępu — ledwie widoczny, żeby bez pracy nie udawał
 #: linii oddzielającej.
 TOR = "#22262d"
-
-#: Pasy piór z logo Papugi (tools/make_icon.py), od skrzydła do głowy.
-PIORA = ("#1c64c4", "#2c965c", "#f7ba1c", "#ce202f")
 
 LOG_BG = "#121418"
 LOG_FG = "#c3c9d2"
